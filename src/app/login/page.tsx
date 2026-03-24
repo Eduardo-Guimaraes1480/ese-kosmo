@@ -76,27 +76,29 @@ export default function LoginPage() {
                 <div className="flex bg-[rgba(11,15,16,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.05)] rounded-full p-1 mb-8 relative z-10">
                     <button
                         type="button"
-                        onClick={() => {
+                        onClick={(e) => {
+                            e.preventDefault();
                             setIsSignUp(false);
                             setError(null);
                         }}
-                        className={`cursor-pointer flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 ${!isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
+                        className={`cursor-pointer flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 touch-manipulation ${!isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
                     >
                         Entrar
                     </button>
                     <button
                         type="button"
-                        onClick={() => {
+                        onClick={(e) => {
+                            e.preventDefault();
                             setIsSignUp(true);
                             setError(null);
                         }}
-                        className={`cursor-pointer flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 ${isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
+                        className={`cursor-pointer flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 touch-manipulation ${isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
                     >
                         Cadastrar
                     </button>
                 </div>
 
-                {/* Formulário */}
+                {/* Formulário (Protegido e Separado dos Toggles) */}
                 <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
                     <div className="space-y-4">
                         {/* Input E-mail */}
