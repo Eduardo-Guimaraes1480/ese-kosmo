@@ -80,7 +80,7 @@ export default function LoginPage() {
                             setIsSignUp(false);
                             setError(null);
                         }}
-                        className={`flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 ${!isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
+                        className={`cursor-pointer flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 ${!isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
                     >
                         Entrar
                     </button>
@@ -90,7 +90,7 @@ export default function LoginPage() {
                             setIsSignUp(true);
                             setError(null);
                         }}
-                        className={`flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 ${isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
+                        className={`cursor-pointer flex-1 py-2 text-sm font-medium rounded-full transition-all duration-300 ${isSignUp ? 'bg-[var(--color-ese-blue)] text-white shadow-[0_0_15px_rgba(72,80,255,0.4)]' : 'text-gray-400 hover:text-white'}`}
                     >
                         Cadastrar
                     </button>

@@ -214,17 +214,20 @@ const CreateActionModal = ({ onClose, onSuccess }: { onClose: () => void, onSucc
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Usuário não autenticado.");
 
-      const { error: insertError } = await supabase.from('actions').insert([
-        {
-          user_id: session.user.id,
-          title,
-          type,
-          xp_reward: xpReward,
-          ese_reward: eseReward,
-          // description: description, 
-          // pilar_id: pilar, 
-        }
-      ]);
+      const payload: any = {
+        user_id: session.user.id,
+        title,
+        type,
+        pillar: pilar,
+        xp_reward: parseInt(xpReward.toString(), 10) || 0,
+        ese_reward: parseInt(eseReward.toString(), 10) || 0,
+      };
+
+      if (description) {
+        payload.description = description;
+      }
+
+      const { error: insertError } = await supabase.from('actions').insert([payload]);
 
       if (insertError) throw insertError;
 
