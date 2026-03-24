@@ -1,12 +1,14 @@
 "use client";
-import React, { useState } from 'react';
-import { 
-  Home, Flame, Store, Users, MessageSquare, Settings, Globe, 
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/src/lib/supabase';
+import {
+  Home, Flame, Store, Users, MessageSquare, Settings, Globe,
   Menu, X, ChevronRight, CheckCircle2, Circle, Plus, User,
-  Shield, Zap, Target, Award, Skull, AlertTriangle
+  Shield, Zap, Target, Award, Skull, AlertTriangle, LogOut
 } from 'lucide-react';
-import { 
-  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer 
+import {
+  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer
 } from 'recharts';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -72,8 +74,8 @@ const Card = ({ children, className }: { children: React.ReactNode; className?: 
 
 const ProgressBar = ({ progress, colorClass, heightClass = "h-2" }: { progress: number, colorClass: string, heightClass?: string }) => (
   <div className={cn("w-full bg-black/50 rounded-full overflow-hidden", heightClass)}>
-    <div 
-      className={cn("h-full rounded-full transition-all duration-500", colorClass)} 
+    <div
+      className={cn("h-full rounded-full transition-all duration-500", colorClass)}
       style={{ width: `${progress}%` }}
     />
   </div>
@@ -82,8 +84,8 @@ const ProgressBar = ({ progress, colorClass, heightClass = "h-2" }: { progress: 
 const VerticalProgressBar = ({ progress, colorClass, label, sublabel }: { progress: number, colorClass: string, label: string, sublabel: string }) => (
   <div className="flex flex-col items-center gap-2">
     <div className="h-24 w-4 bg-black/50 rounded-full overflow-hidden relative flex items-end">
-      <div 
-        className={cn("w-full rounded-full transition-all duration-500", colorClass)} 
+      <div
+        className={cn("w-full rounded-full transition-all duration-500", colorClass)}
         style={{ height: `${progress}%` }}
       />
       <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white drop-shadow-md z-10">
@@ -97,7 +99,7 @@ const VerticalProgressBar = ({ progress, colorClass, label, sublabel }: { progre
   </div>
 );
 
-const Sidebar = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
+const Sidebar = ({ isOpen, onClose, onLogout }: { isOpen: boolean; onClose: () => void; onLogout: () => void }) => {
   const navItems = [
     { icon: <Home className="w-5 h-5" />, label: "Home", active: true },
     { icon: <Flame className="w-5 h-5" />, label: "Ações" },
@@ -112,12 +114,12 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
     <>
       {/* Mobile Overlay */}
       {isOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
           onClick={onClose}
         />
       )}
-      
+
       {/* Sidebar Content */}
       <aside className={cn(
         "fixed top-0 left-0 h-full w-72 bg-ese-black border-r border-white/5 z-50 transform transition-transform duration-300 ease-in-out flex flex-col",
@@ -138,12 +140,12 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
 
         <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
           {navItems.map((item, idx) => (
-            <button 
+            <button
               key={idx}
               className={cn(
                 "w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200",
-                item.active 
-                  ? "bg-white/10 text-white font-semibold" 
+                item.active
+                  ? "bg-white/10 text-white font-semibold"
                   : "text-gray-400 hover:bg-white/5 hover:text-gray-200"
               )}
             >
@@ -151,6 +153,13 @@ const Sidebar = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
               <span className="text-sm tracking-wide">{item.label}</span>
             </button>
           ))}
+          <button
+            onClick={onLogout}
+            className="w-full flex items-center gap-4 px-4 py-3 rounded-xl transition-all duration-200 text-red-500 hover:bg-red-500/10 hover:text-red-400 mt-4"
+          >
+            <LogOut className="w-5 h-5" />
+            <span className="text-sm tracking-wide">Sair</span>
+          </button>
         </nav>
 
         <div className="p-6 border-t border-white/5 text-xs text-gray-500 space-y-2">
@@ -179,14 +188,58 @@ const BottomNav = () => (
 export default function App() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('HOME');
+  const [isLoading, setIsLoading] = useState(true);
+  const [userData, setUserData] = useState<any>(null);
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
+
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push('/login');
+      } else {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+
+        setUserData({
+          name: profile?.nickname || session.user.email,
+          vocation: profile?.vocation || "INICIANTE",
+          level: profile?.level || 1,
+          xp: profile?.xp || 0,
+          xpNext: (profile?.level || 1) * 1000,
+          hp: profile?.hp || 100,
+          maxHp: 100,
+          ese: profile?.ese_balance || 0,
+        });
+        setIsLoading(false);
+      }
+    };
+    checkSession();
+  }, [router]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[var(--color-ese-black)] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[var(--color-ese-blue)]"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-ese-dark to-ese-black text-ese-white flex font-sans selection:bg-ese-blue/30">
-      
-      <Sidebar isOpen={isSidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setSidebarOpen(false)} onLogout={handleLogout} />
 
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        
+
         {/* Mobile Header */}
         <header className="lg:hidden flex items-center justify-between p-4 border-b border-white/5 bg-ese-black/50 backdrop-blur-md z-20">
           <div className="w-10 h-10 rounded-full bg-ese-gray/50 flex items-center justify-center border border-white/10">
@@ -203,8 +256,8 @@ export default function App() {
           <h1 className="font-heading font-bold text-3xl tracking-widest">{activeTab}</h1>
           <div className="flex items-center gap-4">
             <div className="text-right">
-              <div className="text-sm font-bold text-ese-blue-light">{USER_DATA.name}</div>
-              <div className="text-xs text-gray-400">Nível {USER_DATA.level}</div>
+              <div className="text-sm font-bold text-ese-blue-light">{userData?.name || USER_DATA.name}</div>
+              <div className="text-xs text-gray-400">Nível {userData?.level || USER_DATA.level}</div>
             </div>
             <div className="w-12 h-12 rounded-full bg-ese-gray/80 flex items-center justify-center border border-white/20">
               <User className="w-6 h-6 text-gray-300" />
@@ -214,7 +267,7 @@ export default function App() {
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-4 lg:p-8 pb-24 lg:pb-8 space-y-6">
-          
+
           {/* PERSONA SECTION */}
           <section>
             <div className="flex items-center justify-between mb-3 px-1">
@@ -226,34 +279,34 @@ export default function App() {
               <div className="w-32 h-40 bg-black/40 rounded-xl border border-white/5 flex items-center justify-center flex-shrink-0">
                 <User className="w-16 h-16 text-gray-600" />
               </div>
-              
+
               {/* Stats */}
               <div className="flex-1 w-full space-y-3 flex flex-col justify-center">
                 <div className="flex justify-between items-end border-b border-white/10 pb-2">
                   <span className="text-xs text-gray-400 font-semibold tracking-wider">NAME</span>
-                  <span className="font-heading font-bold text-lg">{USER_DATA.name}</span>
+                  <span className="font-heading font-bold text-lg">{userData?.name || USER_DATA.name}</span>
                 </div>
                 <div className="flex justify-between items-end border-b border-white/10 pb-2">
                   <span className="text-xs text-gray-400 font-semibold tracking-wider">VOCAÇÃO</span>
-                  <span className="font-heading font-bold text-ese-blue-light">{USER_DATA.vocation}</span>
+                  <span className="font-heading font-bold text-ese-blue-light">{userData?.vocation || USER_DATA.vocation}</span>
                 </div>
                 <div className="flex justify-between items-center border-b border-white/10 pb-2">
                   <span className="text-xs text-gray-400 font-semibold tracking-wider">XP</span>
                   <div className="flex-1 mx-4">
-                    <ProgressBar progress={(USER_DATA.xp / USER_DATA.xpNext) * 100} colorClass="bg-ese-blue-light" />
+                    <ProgressBar progress={((userData?.xp || USER_DATA.xp) / (userData?.xpNext || USER_DATA.xpNext)) * 100} colorClass="bg-ese-blue-light" />
                   </div>
-                  <span className="font-mono text-sm">{USER_DATA.xp}/{USER_DATA.xpNext}</span>
+                  <span className="font-mono text-sm">{userData?.xp || USER_DATA.xp}/{userData?.xpNext || USER_DATA.xpNext}</span>
                 </div>
                 <div className="flex justify-between items-center border-b border-white/10 pb-2">
                   <span className="text-xs text-gray-400 font-semibold tracking-wider">PONTOS DE VIDA</span>
                   <div className="flex-1 mx-4">
-                    <ProgressBar progress={(USER_DATA.hp / USER_DATA.maxHp) * 100} colorClass="bg-red-500" />
+                    <ProgressBar progress={((userData?.hp || USER_DATA.hp) / (userData?.maxHp || USER_DATA.maxHp)) * 100} colorClass="bg-red-500" />
                   </div>
-                  <span className="font-mono text-sm">{USER_DATA.hp}</span>
+                  <span className="font-mono text-sm">{userData?.hp || USER_DATA.hp}</span>
                 </div>
                 <div className="flex justify-between items-end pt-1">
                   <span className="text-xs text-gray-400 font-semibold tracking-wider">E$E</span>
-                  <span className="font-heading font-bold text-yellow-400 text-lg">{USER_DATA.ese}</span>
+                  <span className="font-heading font-bold text-yellow-400 text-lg">{userData?.ese || USER_DATA.ese}</span>
                 </div>
               </div>
             </Card>
@@ -266,7 +319,7 @@ export default function App() {
               <div className="text-xs text-gray-400 font-semibold tracking-wider mb-4">MY LIFE</div>
               <div className="flex justify-between items-end px-2 sm:px-6">
                 {PILLARS.map((pillar, idx) => (
-                  <VerticalProgressBar 
+                  <VerticalProgressBar
                     key={idx}
                     progress={pillar.progress}
                     colorClass={pillar.color}
@@ -289,7 +342,7 @@ export default function App() {
                 <div className="font-heading font-black text-4xl text-orange-500 drop-shadow-[0_2px_10px_rgba(0,0,0,0.8)]">15 dias</div>
               </Card>
             </div>
-            
+
             <div>
               <h2 className="font-heading font-bold text-lg tracking-widest mb-3 px-1 uppercase">Gráfico</h2>
               <Card className="h-48 flex items-center justify-center p-0 overflow-hidden">
@@ -313,11 +366,11 @@ export default function App() {
                 VER TODAS <ChevronRight className="w-4 h-4 ml-1" />
               </button>
             </div>
-            
+
             {/* Action Categories Filter (Mocked) */}
             <div className="flex gap-2 overflow-x-auto pb-4 scrollbar-hide">
               {['DIÁRIAS', 'FAZER', 'MISSÕES', 'CONQUISTA', 'BOSS', 'PROBLEMAS'].map((cat, i) => (
-                <button 
+                <button
                   key={i}
                   className={cn(
                     "px-4 py-1.5 rounded-full text-xs font-bold tracking-wider whitespace-nowrap transition-colors",
