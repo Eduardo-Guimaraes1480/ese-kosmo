@@ -5,7 +5,7 @@ import { supabase } from '@/src/lib/supabase';
 import {
   Home, Flame, Store, Users, MessageSquare, Settings, Globe,
   Menu, X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Plus, User,
-  Shield, Zap, Target, Award, Skull, AlertTriangle, LogOut, Trash2, RotateCcw, MoreVertical
+  Shield, Zap, Target, Award, Skull, AlertTriangle, LogOut, Trash2, RotateCcw, MoreVertical, Bell
 } from 'lucide-react';
 import {
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer
