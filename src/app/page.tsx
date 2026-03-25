@@ -948,11 +948,62 @@ export default function App() {
   const [actions, setActions] = useState<any[]>([]);
   const [statusIndex, setStatusIndex] = useState(0);
   const [activeFilter, setActiveFilter] = useState('todas');
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
   const router = useRouter();
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  // --- Toast / Pop-up System ---
+  const [popups, setPopups] = useState<any[]>([]);
+
+  const showPopup = (title: string, message: string, type: string) => {
+    const id = Date.now() + Math.random();
+    setPopups(prev => [...prev, { id, title, message, type }]);
+    setTimeout(() => {
+      setPopups(prev => prev.filter(p => p.id !== id));
+    }, 5000);
+  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push('/login');
+  };
+
+  const fetchNotifications = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (!error) {
+      setNotifications(data || []);
+    }
+  };
+
+  const markAsRead = async (notifId: string) => {
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('id', notifId);
+    if (!error) {
+      setNotifications(prev =>
+        prev.map(n => n.id === notifId ? { ...n, read: true } : n)
+      );
+    }
+  };
+
+  const markAllAsRead = async () => {
+    if (!userData?.id) return;
+    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    if (unreadIds.length === 0) return;
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read: true })
+      .in('id', unreadIds);
+    if (!error) {
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    }
   };
 
   const fetchActions = async (userId: string) => {
@@ -988,6 +1039,33 @@ export default function App() {
     if (!error) {
       setRadarData(fetchedRadarData || []);
     }
+    return fetchedRadarData || [];
+  };
+
+  const checkRadarDecay = async (rows: any[], userId: string) => {
+    if (!rows.length) return;
+    const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const oldest = rows.reduce((min, r) => {
+      const t = r.atualizado ? new Date(r.atualizado).getTime() : 0;
+      return t < min ? t : min;
+    }, Infinity);
+    if (now - oldest < SEVEN_DAYS) return;
+    // Apply -5 decay to all 5 priorities (minimum 0)
+    await Promise.all(
+      rows.map(r =>
+        supabase
+          .from('grafico_sacrificios')
+          .update({ valor: Math.max(0, Number(r.valor || 0) - 5), atualizado: new Date().toISOString() })
+          .eq('id', r.id)
+      )
+    );
+    await fetchRadarData(userId);
+    showPopup(
+      '⚠️ TEMPO PASSANDO',
+      'Suas prioridades reduziram 5%. O sacrifício exige manutenção constante.',
+      'radar_drop'
+    );
   };
 
   const deleteAction = async (actionId: string) => {
@@ -1016,9 +1094,14 @@ export default function App() {
 
     // B. Gamificação refletindo instantaneamente
     if (!userData?.id) return;
+
+    let notificationsTriggered = false;
     
     const xpReward = Number(action.xp_reward || 0);
     const eseReward = Number(action.ese_reward || 0);
+
+    // Captura o nível ANTES de adicionar o XP
+    const oldLevel = calculateLevelInfo(userData.xp || 0).level;
     
     const newXp = (userData.xp || 0) + xpReward;
     const newEse = (userData.ese || 0) + eseReward;
@@ -1036,6 +1119,21 @@ export default function App() {
         ese: newEse,
         level: levelInfo.level
       }));
+    }
+
+    // 🎉 Gatilho: Level Up da Persona
+    if (levelInfo.level > oldLevel) {
+      const lvlTitle = '🎉 LEVEL UP!';
+      const lvlMsg = `Sua Persona atingiu o Nível ${levelInfo.level}! Continue evoluindo.`;
+      await supabase.from('notifications').insert({
+        user_id: userData.id,
+        title: lvlTitle,
+        message: lvlMsg,
+        type: 'level_up',
+        read: false,
+      });
+      showPopup(lvlTitle, lvlMsg, 'level_up');
+      notificationsTriggered = true;
     }
 
     // C. Gamificação do Pilar
@@ -1067,6 +1165,21 @@ export default function App() {
           .eq('id', pillarData.id);
 
         await fetchPillars(userData.id);
+
+        // 📈 Gatilho: Level Up do Pilar
+        if (finalLevel > currentLevel) {
+          const plTitle = '📈 PILAR EVOLUIU!';
+          const plMsg = `O pilar "${pilarName}" atingiu o Nível ${finalLevel}! Incrível progresso.`;
+          await supabase.from('notifications').insert({
+            user_id: userData.id,
+            title: plTitle,
+            message: plMsg,
+            type: 'pilar_up',
+            read: false,
+          });
+          showPopup(plTitle, plMsg, 'pilar_up');
+          notificationsTriggered = true;
+        }
       }
     }
 
@@ -1098,6 +1211,42 @@ export default function App() {
           });
       }
       await fetchRadarData(userData.id);
+    }
+
+    // F. Motor de Ofensiva (apenas para Diárias)
+    if (action.type === 'diaria') {
+      const todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD local
+      if (userData.last_active_date !== todayStr) {
+        const newOfensiva = (userData.offensive_days || 0) + 1;
+        await supabase
+          .from('profiles')
+          .update({ offensive_days: newOfensiva, last_active_date: todayStr })
+          .eq('id', userData.id);
+        setUserData((prev: any) => ({
+          ...prev,
+          offensive_days: newOfensiva,
+          last_active_date: todayStr,
+        }));
+        // Notificar em dias especiais: 1, 2, 3 ou múltiplos de 7
+        if ([1, 2, 3].includes(newOfensiva) || newOfensiva % 7 === 0) {
+          const offTitle = '🔥 MINHA OFENSIVA!';
+          const offMsg = `Você atingiu ${newOfensiva} dia${newOfensiva > 1 ? 's' : ''} seguido${newOfensiva > 1 ? 's' : ''}!`;
+          await supabase.from('notifications').insert({
+            user_id: userData.id,
+            title: offTitle,
+            message: offMsg,
+            type: 'ofensiva',
+            read: false,
+          });
+          showPopup(offTitle, offMsg, 'ofensiva');
+          notificationsTriggered = true;
+        }
+      }
+    }
+
+    // G. Atualizar notificações se algum gatilho foi disparado
+    if (notificationsTriggered) {
+      await fetchNotifications(userData.id);
     }
   };
 
@@ -1269,11 +1418,15 @@ export default function App() {
           maxHp: 100,
           ese: profile?.ese_balance || 0,
           offensive_days: profile?.offensive_days || 0,
+          last_active_date: profile?.last_active_date || null,
         });
 
         await fetchActions(session.user.id);
         await fetchPillars(session.user.id);
-        await fetchRadarData(session.user.id);
+        const radarRows = await fetchRadarData(session.user.id);
+        await fetchNotifications(session.user.id);
+        // Check radar 7-day decay
+        await checkRadarDecay(radarRows || [], session.user.id);
         setIsLoading(false);
       }
     };
@@ -1305,28 +1458,135 @@ export default function App() {
             <User className="w-5 h-5 text-gray-300" />
           </div>
           <h1 className="font-heading font-bold text-lg tracking-widest">{activeTab}</h1>
-          <button onClick={() => setSidebarOpen(true)} className="p-2 text-gray-300">
-            <Menu className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Bell Icon Mobile */}
+            <button
+              onClick={() => setIsNotifOpen(prev => !prev)}
+              className="relative p-2 text-gray-300 hover:text-white transition-colors"
+              aria-label="Notificações"
+            >
+              <Bell className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#0B0F10]" />
+              )}
+            </button>
+            <button onClick={() => setSidebarOpen(true)} className="p-2 text-gray-300">
+              <Menu className="w-6 h-6" />
+            </button>
+          </div>
         </header>
 
         {/* Desktop Header */}
         <header className="hidden lg:flex items-center justify-between p-8 pb-4">
           <h1 className="font-heading font-bold text-3xl tracking-widest">{activeTab}</h1>
-          <div 
-            className="flex items-center gap-4 cursor-pointer hover:bg-white/5 transition-colors p-2 rounded-xl"
-            onClick={() => setIsEditProfileModalOpen(true)}
-            title="Editar Persona"
-          >
-            <div className="text-right">
-              <div className="text-sm font-bold text-ese-blue-light">{userData?.name || USER_DATA.name}</div>
-              <div className="text-xs text-gray-400">Nível {userData ? calculateLevelInfo(userData.xp).level : USER_DATA.level}</div>
-            </div>
-            <div className="w-12 h-12 rounded-full bg-ese-gray/80 flex items-center justify-center border border-white/20">
-              <User className="w-6 h-6 text-gray-300" />
+          <div className="flex items-center gap-3">
+            {/* Bell Icon Desktop */}
+            <button
+              onClick={() => setIsNotifOpen(prev => !prev)}
+              className="relative p-2.5 rounded-xl bg-ese-gray/40 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition-all"
+              aria-label="Notificações"
+            >
+              <Bell className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[#0B0F10]" />
+              )}
+            </button>
+            <div 
+              className="flex items-center gap-4 cursor-pointer hover:bg-white/5 transition-colors p-2 rounded-xl"
+              onClick={() => setIsEditProfileModalOpen(true)}
+              title="Editar Persona"
+            >
+              <div className="text-right">
+                <div className="text-sm font-bold text-ese-blue-light">{userData?.name || USER_DATA.name}</div>
+                <div className="text-xs text-gray-400">Nível {userData ? calculateLevelInfo(userData.xp).level : USER_DATA.level}</div>
+              </div>
+              <div className="w-12 h-12 rounded-full bg-ese-gray/80 flex items-center justify-center border border-white/20">
+                <User className="w-6 h-6 text-gray-300" />
+              </div>
             </div>
           </div>
         </header>
+
+        {/* === NOTIFICATION PANEL === */}
+        {isNotifOpen && (
+          <>
+            {/* Backdrop (click fora fecha) */}
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setIsNotifOpen(false)}
+            />
+            {/* Panel */}
+            <div className="absolute top-[72px] right-4 lg:top-[88px] lg:right-8 z-50 w-[340px] max-w-[calc(100vw-2rem)] bg-[#0B0F10] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+              {/* Panel Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/5">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-[#98A9FF]" />
+                  <span className="text-sm font-bold tracking-widest text-white uppercase">Notificações</span>
+                  {unreadCount > 0 && (
+                    <span className="px-2 py-0.5 bg-[#15203C] rounded-full text-[10px] font-black text-[#98A9FF]">
+                      {unreadCount} novas
+                    </span>
+                  )}
+                </div>
+                {unreadCount > 0 && (
+                  <button
+                    onClick={markAllAsRead}
+                    className="text-[10px] font-bold text-[#98A9FF] hover:text-white transition-colors uppercase tracking-wider"
+                  >
+                    Marcar todas
+                  </button>
+                )}
+              </div>
+
+              {/* Notification List */}
+              <div className="overflow-y-auto max-h-[420px]" style={{ scrollbarWidth: 'none' }}>
+                {notifications.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 px-6 text-center gap-3">
+                    <Bell className="w-10 h-10 text-gray-700" />
+                    <p className="text-sm text-gray-500 font-semibold">Nenhuma notificação no momento</p>
+                    <p className="text-xs text-gray-600">As notificações aparecerão aqui quando houver atividade.</p>
+                  </div>
+                ) : (
+                  notifications.map(n => (
+                    <button
+                      key={n.id}
+                      onClick={() => markAsRead(n.id)}
+                      className={cn(
+                        "w-full text-left flex items-start gap-3 px-5 py-4 border-b border-white/5 transition-all hover:bg-white/5",
+                        !n.read ? "bg-[#15203C]/60" : "bg-transparent"
+                      )}
+                    >
+                      {/* Unread indicator */}
+                      <div className="flex-shrink-0 mt-1.5">
+                        {!n.read ? (
+                          <div className="w-2 h-2 rounded-full bg-[#98A9FF]" />
+                        ) : (
+                          <div className="w-2 h-2 rounded-full bg-transparent" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={cn(
+                          "text-sm leading-snug truncate",
+                          !n.read ? "font-bold text-white" : "font-medium text-gray-300"
+                        )}>
+                          {n.title || n.tipo || 'Notificação'}
+                        </p>
+                        {n.message && (
+                          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</p>
+                        )}
+                        <p className="text-[10px] text-gray-600 mt-1 font-semibold">
+                          {n.created_at
+                            ? new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(n.created_at))
+                            : ''}
+                        </p>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-4 lg:p-8 pb-24 lg:pb-8 space-y-6">
@@ -1657,32 +1917,17 @@ export default function App() {
                 </div>
               )}
 
-              {/* AREA 3: HISTÓRICO (> 24h) */}
+              {/* AREA 3: HISTÓRICO (> 24h) — Link para página de ações */}
               {historico.length > 0 && (
                 <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-gray-600 uppercase tracking-widest px-1 mb-2">Histórico (Trancado)</h3>
-                  {historico.map((action) => (
-                    <Card key={action.id} className="p-3 flex items-center gap-4 bg-black/40 border-white/5 opacity-50 grayscale transition-all">
-                      <div className="flex-shrink-0 text-gray-600">
-                        <CheckCircle2 className="w-6 h-6" />
-                      </div>
-
-                      <div
-                        className="flex-1 min-w-0 cursor-pointer"
-                        onClick={() => setSelectedAction(action)}
-                      >
-                        <h3 className="font-bold truncate text-sm text-gray-500 line-through">
-                          {action.title}
-                        </h3>
-                      </div>
-
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <div className="p-2 text-gray-600 cursor-not-allowed" title="Armazenado no Banco">
-                          <MoreVertical className="w-5 h-5" />
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
+                  <h3 className="text-xs font-bold text-gray-600 uppercase tracking-widest px-1 mb-2">Histórico</h3>
+                  <button
+                    onClick={() => router.push('/acoes')}
+                    className="w-full py-4 flex items-center justify-center gap-3 bg-white/5 border border-dashed border-white/10 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all font-bold tracking-widest text-sm"
+                  >
+                    <span className="text-xl">📁</span>
+                    ACESSAR BANCO DE DADOS DE AÇÕES
+                  </button>
                 </div>
               )}
             </div>
@@ -1761,6 +2006,41 @@ export default function App() {
       )}
 
       <BottomNav />
+
+      {/* === TOAST POP-UP OVERLAY === */}
+      <div className="fixed top-20 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
+        {popups.map(p => {
+          const iconMap: Record<string, string> = {
+            level_up: '🎉',
+            pilar_up: '📈',
+            ofensiva: '🔥',
+            radar_drop: '⚠️',
+          };
+          const icon = iconMap[p.type] || '🔔';
+          return (
+            <div
+              key={p.id}
+              style={{
+                animation: 'toastSlideIn 0.35s cubic-bezier(0.34,1.56,0.64,1) both',
+              }}
+              className="pointer-events-auto w-72 bg-[#0B0F10]/95 backdrop-blur-xl border border-white/10 rounded-2xl p-4 flex items-start gap-3 shadow-2xl"
+            >
+              <span className="text-2xl leading-none mt-0.5 flex-shrink-0">{icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black text-white tracking-wide leading-tight">{p.title}</p>
+                <p className="text-xs text-gray-400 mt-1 leading-snug">{p.message}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <style>{`
+        @keyframes toastSlideIn {
+          from { opacity: 0; transform: translateX(110%) scale(0.9); }
+          to   { opacity: 1; transform: translateX(0)   scale(1);   }
+        }
+      `}</style>
     </div>
   );
 }
