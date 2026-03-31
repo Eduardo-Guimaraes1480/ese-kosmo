@@ -32,7 +32,10 @@ export default function LoginPage() {
 
                 // Se o signup for bem sucedido, redirecionamos. Note que com e-mail confirmation habilitado, 
                 // o usuário precisaria validar o e-mail primeiro. Sem confirmação obrigatória, já loga direto.
-                router.push('/');
+                await supabase.auth.getSession();
+                setTimeout(() => {
+                    router.push('/');
+                }, 300);
             } else {
                 const { error: signInError } = await supabase.auth.signInWithPassword({
                     email,
@@ -41,7 +44,10 @@ export default function LoginPage() {
 
                 if (signInError) throw signInError;
 
-                router.push('/');
+                await supabase.auth.getSession();
+                setTimeout(() => {
+                    router.push('/');
+                }, 300);
             }
         } catch (err: any) {
             // Logs sensíveis ou específicos devem ficar restritos ao console/servidor
@@ -64,8 +70,8 @@ export default function LoginPage() {
             <div className="w-full max-w-md bg-[rgba(30,10,64,0.3)] backdrop-blur-md border border-[var(--color-ese-purple)] rounded-2xl p-8 shadow-2xl relative overflow-hidden">
 
                 {/* Efeito luminoso de fundo */}
-                <div className="absolute -top-32 -right-32 w-64 h-64 bg-[var(--color-ese-blue)] rounded-full mix-blend-screen filter blur-[100px] opacity-30" />
-                <div className="absolute -bottom-32 -left-32 w-64 h-64 bg-[var(--color-ese-darker)] rounded-full mix-blend-screen filter blur-[100px] opacity-30" />
+                <div className="absolute -top-32 -right-32 w-64 h-64 bg-[var(--color-ese-blue)] rounded-full mix-blend-screen filter blur-[100px] opacity-30 pointer-events-none" />
+                <div className="absolute -bottom-32 -left-32 w-64 h-64 bg-[var(--color-ese-darker)] rounded-full mix-blend-screen filter blur-[100px] opacity-30 pointer-events-none" />
 
                 <div className="text-center mb-8 relative z-10">
                     <h1 className="text-3xl font-heading font-bold text-[var(--color-ese-white)] mb-2 tracking-wide">ESE KOSMO</h1>
@@ -73,7 +79,7 @@ export default function LoginPage() {
                 </div>
 
                 {/* Toggle Login/Sign Up */}
-                <div className="flex bg-[rgba(11,15,16,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.05)] rounded-full p-1 mb-8 relative z-10">
+                <div className="flex bg-[rgba(11,15,16,0.6)] backdrop-blur-xl border border-[rgba(255,255,255,0.05)] rounded-full p-1 mb-8 relative z-50">
                     <button
                         type="button"
                         onClick={(e) => {

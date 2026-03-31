@@ -20,6 +20,7 @@ CREATE TABLE public.actions (
   xp_reward integer,
   ese_reward integer,
   status text DEFAULT 'pendente',
+  order_index integer DEFAULT 0,
   created_at timestamp with time zone DEFAULT now()
 );
 
