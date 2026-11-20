@@ -3,6 +3,7 @@ import React from 'react';
 import { GripVertical, CheckSquare, Square, MoreVertical } from 'lucide-react';
 import { DraggableProvided, DraggableStateSnapshot } from '@hello-pangea/dnd';
 import { cn } from '@/src/lib/utils';
+import { Action, ManagementStatus } from '@/src/types/ese-kosmo';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -13,11 +14,19 @@ export interface AcaoCardAction {
   type?: string;
   xp_reward?: number;
   ese_reward?: number;
-  pillar?: string;
-  pilar_impact?: number;
-  radar_impact?: number;
-  sacrifice_priority?: string;
-  completed_at?: string;
+  pillar?: string | null;
+  pilar_impact?: number | null;
+  radar_impact?: number | null;
+  sacrifice_priority?: string | null;
+  completed_at?: string | null;
+  management_status?: ManagementStatus | string;
+  due_date?: string | null;
+  start_date?: string | null;
+  impact_degree?: string;
+  level_jump?: number;
+  is_system?: boolean;
+  is_shared?: boolean;
+  visibility?: string;
   [key: string]: any;
 }
 
