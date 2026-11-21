@@ -17,12 +17,12 @@ import { ProgressBar, VerticalProgressBar } from '@/src/components/ui/ProgressBa
 import { Sidebar } from '@/src/components/ui/Sidebar';
 import { Header } from '@/src/components/ui/Header';
 import { BottomNav } from '@/src/components/ui/BottomNav';
-import { CreateActionModal } from '@/src/components/ferramenta/CreateActionModal';
-import { ActionDetailsModal } from '@/src/components/ferramenta/ActionDetailsModal';
+import { ActionFormModal } from '@/src/components/ferramenta/ActionFormModal';
 import { EditProfileModal } from '@/src/components/ferramenta/EditProfileModal';
 import { EditPillarsModal } from '@/src/components/ferramenta/EditPillarsModal';
 import { AcaoCard } from '@/src/components/ferramenta/AcaoCard';
 import { completeAction as engineComplete, undoAction as engineUndo } from '@/src/lib/gamification/actionEngine';
+import { fetchActionsWithRelations } from '@/src/lib/actions/actionService';
 
 
 
@@ -99,14 +99,11 @@ export default function App() {
   };
 
   const fetchActions = async (userId: string) => {
-    const { data: fetchedActions, error } = await supabase
-      .from('actions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (!error) {
-      setActions(fetchedActions || []);
+    try {
+      const fetchedActions = await fetchActionsWithRelations(userId);
+      setActions(fetchedActions);
+    } catch (error) {
+      console.error('Erro ao buscar ações com relações:', error);
     }
   };
 
@@ -984,27 +981,21 @@ export default function App() {
         </div>
       </main>
 
-      {isModalOpen && (
-        <CreateActionModal
-          pillars={pillars}
-          onClose={() => setIsModalOpen(false)}
+      {(isModalOpen || selectedAction) && (
+        <ActionFormModal
+          isOpen={isModalOpen || Boolean(selectedAction)}
+          initialAction={selectedAction}
+          initialType="fazer"
+          onClose={() => {
+            setIsModalOpen(false);
+            setSelectedAction(null);
+          }}
           onSuccess={() => {
             setIsModalOpen(false);
+            setSelectedAction(null);
             if (userData?.id) {
               fetchActions(userData.id);
             }
-          }}
-        />
-      )}
-
-      {selectedAction && (
-        <ActionDetailsModal
-          action={selectedAction}
-          pillars={pillars}
-          onClose={() => setSelectedAction(null)}
-          onSuccess={() => {
-            setSelectedAction(null);
-            if (userData?.id) fetchActions(userData.id);
           }}
         />
       )}
@@ -1036,7 +1027,7 @@ export default function App() {
         />
       )}
 
-      <BottomNav active="/" />
+      <BottomNav active="/" onActionClick={() => setIsModalOpen(true)} />
 
       {/* === TOAST POP-UP OVERLAY === */}
       <div className="fixed top-20 right-4 z-[200] flex flex-col gap-2 pointer-events-none">

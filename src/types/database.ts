@@ -297,7 +297,7 @@ export interface Database {
           days_of_week?: number[] | null;
           days_of_month?: number[] | null;
           times_of_day?: string[] | null;
-          duration_minutes?: number[] | null;
+          duration_minutes?: number | null;
           start_date?: string;
           end_date?: string | null;
           created_at?: string;
@@ -428,18 +428,123 @@ export interface Database {
         ];
       };
     };
-    Views: Record<string, never>;
-    Functions: {
-      protect_profile_plan: {
-        Args: Record<string, never>;
-        Returns: unknown;
+    action_folders: {
+      Row: {
+        id: string;
+        user_id: string;
+        parent_folder_id: string | null;
+        name: string;
+        color: string;
+        icon: string;
+        order_index: number;
+        created_at: string;
       };
-      prevent_requirement_keys_mutation: {
-        Args: Record<string, never>;
-        Returns: unknown;
+      Insert: {
+        id?: string;
+        user_id: string;
+        parent_folder_id?: string | null;
+        name: string;
+        color?: string;
+        icon?: string;
+        order_index?: number;
+        created_at?: string;
       };
+      Update: {
+        id?: string;
+        user_id?: string;
+        parent_folder_id?: string | null;
+        name?: string;
+        color?: string;
+        icon?: string;
+        order_index?: number;
+        created_at?: string;
+      };
+      Relationships: [
+        {
+          foreignKeyName: "action_folders_user_id_fkey";
+          columns: ["user_id"];
+          isOneToOne: false;
+          referencedRelation: "profiles";
+          referencedColumns: ["id"];
+        },
+        {
+          foreignKeyName: "action_folders_parent_folder_id_fkey";
+          columns: ["parent_folder_id"];
+          isOneToOne: false;
+          referencedRelation: "action_folders";
+          referencedColumns: ["id"];
+        }
+      ];
     };
-    Enums: Record<string, never>;
-    CompositeTypes: Record<string, never>;
+    action_folder_items: {
+      Row: {
+        id: string;
+        folder_id: string;
+        action_id: string;
+        user_id: string;
+        order_index: number;
+        created_at: string;
+      };
+      Insert: {
+        id?: string;
+        folder_id: string;
+        action_id: string;
+        user_id: string;
+        order_index?: number;
+        created_at?: string;
+      };
+      Update: {
+        id?: string;
+        folder_id?: string;
+        action_id?: string;
+        user_id?: string;
+        order_index?: number;
+        created_at?: string;
+      };
+      Relationships: [
+        {
+          foreignKeyName: "action_folder_items_folder_id_fkey";
+          columns: ["folder_id"];
+          isOneToOne: false;
+          referencedRelation: "action_folders";
+          referencedColumns: ["id"];
+        },
+        {
+          foreignKeyName: "action_folder_items_action_id_fkey";
+          columns: ["action_id"];
+          isOneToOne: false;
+          referencedRelation: "actions";
+          referencedColumns: ["id"];
+        },
+        {
+          foreignKeyName: "action_folder_items_user_id_fkey";
+          columns: ["user_id"];
+          isOneToOne: false;
+          referencedRelation: "profiles";
+          referencedColumns: ["id"];
+        }
+      ];
+    };
   };
-}
+  Views: Record<string, never>;
+  Functions: {
+    protect_profile_plan: {
+      Args: Record<string, never>;
+      Returns: unknown;
+    };
+    prevent_requirement_keys_mutation: {
+      Args: Record<string, never>;
+      Returns: unknown;
+    };
+    prevent_folder_cycle: {
+      Args: Record<string, never>;
+      Returns: unknown;
+    };
+    check_folder_item_user_match: {
+      Args: Record<string, never>;
+      Returns: unknown;
+    };
+  };
+  Enums: Record<string, never>;
+  CompositeTypes: Record<string, never>;
+};

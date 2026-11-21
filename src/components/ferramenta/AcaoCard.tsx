@@ -3,7 +3,8 @@ import React from 'react';
 import { GripVertical, CheckSquare, Square, MoreVertical } from 'lucide-react';
 import { DraggableProvided, DraggableStateSnapshot } from '@hello-pangea/dnd';
 import { cn } from '@/src/lib/utils';
-import { Action, ManagementStatus } from '@/src/types/ese-kosmo';
+import { Action, ManagementStatus, getEffectiveManagementStatus } from '@/src/types/ese-kosmo';
+import { ActionFolder, MANAGEMENT_STATUS_MAP } from '@/src/components/prototypes/types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,7 @@ interface AcaoCardProps {
   action: AcaoCardAction;
   pillarColor?: string;          // Tailwind bg class, e.g. "bg-blue-500"
   pillarHexColor?: string;       // Raw hex for inline style fallback
+  folders?: ActionFolder[];      // Pastas para exibir tags
   /** Called immediately (optimistic) before/after the server responds */
   onStatusChange?: (actionId: string, newStatus: 'concluido' | 'pendente') => void;
   /** Open details modal */
@@ -51,6 +53,7 @@ export const AcaoCard = ({
   action,
   pillarColor,
   pillarHexColor,
+  folders,
   onStatusChange,
   onDetailsClick,
   draggable = true,
@@ -117,17 +120,46 @@ export const AcaoCard = ({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <h4
-          className={cn(
-            'font-bold text-sm sm:text-base truncate',
-            done ? 'text-gray-500 line-through decoration-gray-500/50' : 'text-white'
-          )}
-        >
-          {action.title}
-        </h4>
+        <div className="flex items-center gap-2">
+          <h4
+            className={cn(
+              'font-bold text-sm sm:text-base truncate',
+              done ? 'text-gray-500 line-through decoration-gray-500/50' : 'text-white'
+            )}
+          >
+            {action.title}
+          </h4>
+          {(() => {
+            const effStatus = getEffectiveManagementStatus({
+              due_date: action.due_date ?? null,
+              status: action.status,
+              management_status: action.management_status as any,
+            });
+            const statusMeta = MANAGEMENT_STATUS_MAP[effStatus];
+            if (!statusMeta || effStatus === 'nao_definido') return null;
+            return (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0',
+                  statusMeta.badgeClass
+                )}
+                title={statusMeta.description}
+              >
+                <span className={cn('w-1.5 h-1.5 rounded-full', statusMeta.dotClass)} />
+                {statusMeta.shortLabel}
+              </span>
+            );
+          })()}
+        </div>
+
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[10px] sm:text-xs font-bold tracking-wide">
           <span className="text-gray-400">🔅 XP: {action.xp_reward ?? 0}</span>
           <span className="text-[#98A9FF]">💸 {action.ese_reward ?? 0}E$E</span>
+          {action.subtasks && action.subtasks.length > 0 && (
+            <span className="text-gray-400 bg-white/5 px-1.5 py-0.5 rounded">
+              ☑ {action.subtasks.filter((s: any) => s.is_completed).length}/{action.subtasks.length}
+            </span>
+          )}
           {action.pillar && (
             <span
               className={cn(
@@ -139,6 +171,30 @@ export const AcaoCard = ({
             >
               {action.pillar}
             </span>
+          )}
+          {folders && action.folderIds && action.folderIds.length > 0 && (
+            <div className="flex items-center gap-1">
+              {action.folderIds.slice(0, 2).map((fid: string) => {
+                const f = folders.find((item) => item.id === fid);
+                if (!f) return null;
+                return (
+                  <span
+                    key={f.id}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border border-white/10 bg-black/40 text-gray-300"
+                    style={{ borderColor: `${f.color}40` }}
+                    title={`Pasta: ${f.name}`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: f.color }} />
+                    <span className="truncate max-w-[65px]">{f.name}</span>
+                  </span>
+                );
+              })}
+              {action.folderIds.length > 2 && (
+                <span className="text-[9px] text-gray-500 font-mono">
+                  +{action.folderIds.length - 2}
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>
