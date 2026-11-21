@@ -853,10 +853,12 @@ export const ActionsHubPrototype: React.FC = () => {
       overrideParentId !== undefined ? overrideParentId : newFolderParentId;
     const created: ActionFolder = {
       id: `folder-${Date.now()}`,
+      user_id: 'mock-user',
       name: clean,
-      description: parentIdToUse ? 'Subpasta personalizada.' : 'Pasta personalizada de ações.',
-      accentHex: newFolderColor,
-      parentId: parentIdToUse,
+      color: newFolderColor,
+      icon: 'folder',
+      parent_folder_id: parentIdToUse,
+      order_index: folders.length,
       created_at: new Date().toISOString(),
     };
     setFolders((prev) => [...prev, created]);
@@ -1136,7 +1138,7 @@ export const ActionsHubPrototype: React.FC = () => {
                     }}
                     className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
                   >
-                    <span className="shrink-0 flex items-center" style={{ color: folder.accentHex }}>
+                    <span className="shrink-0 flex items-center" style={{ color: folder.color }}>
                       {isActive ? (
                         <FolderOpen className="w-4 h-4" />
                       ) : (
@@ -1649,18 +1651,18 @@ export const ActionsHubPrototype: React.FC = () => {
                         >
                           <div
                             className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                            style={{ backgroundColor: `${folder.accentHex}22` }}
+                            style={{ backgroundColor: `${folder.color}22` }}
                           >
                             <span
                               className="flex items-center"
-                              style={{ color: folder.accentHex }}
+                              style={{ color: folder.color }}
                             >
                               <Folder className="w-5 h-5" />
                             </span>
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-white truncate">{folder.name}</p>
-                            {folder.parentId && (
+                            {folder.parent_folder_id && (
                               <p className="text-[9px] text-gray-500 truncate">{pathLabel}</p>
                             )}
                             <p className="text-[10px] text-gray-400 tabular-nums">
@@ -2065,7 +2067,7 @@ export const ActionsHubPrototype: React.FC = () => {
                             >
                               <span
                                 className="shrink-0 flex items-center"
-                                style={{ color: sub.accentHex }}
+                                style={{ color: sub.color }}
                               >
                                 <Folder className="w-5 h-5" />
                               </span>
@@ -2200,7 +2202,7 @@ export const ActionsHubPrototype: React.FC = () => {
                                       >
                                         <span
                                           className="w-1.5 h-1.5 rounded-full shrink-0"
-                                          style={{ backgroundColor: fObj.accentHex }}
+                                          style={{ backgroundColor: fObj.color }}
                                         />
                                         <span className="truncate">{fObj.name}</span>
                                       </span>
@@ -3704,7 +3706,7 @@ export const ActionsHubPrototype: React.FC = () => {
                                 >
                                   <span
                                     className="w-2 h-2 rounded-full shrink-0"
-                                    style={{ backgroundColor: folder.accentHex }}
+                                    style={{ backgroundColor: folder.color }}
                                   />
                                   <span>{pathLabel}</span>
                                 </button>

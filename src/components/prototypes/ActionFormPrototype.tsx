@@ -1018,7 +1018,7 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
                   >
                     <span
                       className="flex items-center"
-                      style={{ color: folderObj.accentHex }}
+                      style={{ color: folderObj.color }}
                     >
                       <Folder className="w-3 h-3" />
                     </span>

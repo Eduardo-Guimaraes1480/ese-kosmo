@@ -385,7 +385,7 @@ export default function CategoriaPage() {
                         {(drag, snapshot) => (
                           <AcaoCard
                             action={action}
-                            pillarColor={getPillarColor(action.pillars?.[0] || action.pillar)}
+                            pillarColor={getPillarColor(action.pillars?.[0] || '')}
                             folders={folders}
                             draggable={categoria !== 'historico'}
                             dragProvided={drag}
