@@ -183,15 +183,26 @@ export default function App() {
         setActions(prev => prev.map(a => a.id === actionId ? { ...a, status: action.status } : a));
         return;
       }
-      // Sync local userData XP/ESE so stats card updates without a full refetch
-      if (result.xpGained || result.eseGained) {
-        const newXp = (userData.xp || 0) + (result.xpGained || 0);
-        const newEse = (userData.ese || 0) + (result.eseGained || 0);
+      // Sync local userData and pillars/radar from server
+      await Promise.all([
+        fetchActions(userData.id),
+        fetchPillars(userData.id),
+        fetchRadarData(userData.id),
+      ]);
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('xp, ese_balance, level, offensive_days, last_active_date, hp')
+        .eq('id', userData.id)
+        .single();
+      if (prof) {
         setUserData((prev: any) => ({
           ...prev,
-          xp: newXp,
-          ese: newEse,
-          level: calculateLevelInfo(newXp).level,
+          xp: prof.xp,
+          ese: prof.ese_balance,
+          level: prof.level,
+          offensive_days: prof.offensive_days,
+          last_active_date: prof.last_active_date,
+          hp: prof.hp,
         }));
       }
       if (result.leveledUp) await fetchNotifications(userData.id);
@@ -201,296 +212,30 @@ export default function App() {
         setActions(prev => prev.map(a => a.id === actionId ? { ...a, status: action.status } : a));
         return;
       }
-      // Refetch profile to sync XP after undo
-      await fetchActions(userData.id);
-      const { data: prof } = await supabase.from('profiles').select('xp, ese_balance, level').eq('id', userData.id).single();
-      if (prof) setUserData((prev: any) => ({ ...prev, xp: prof.xp, ese: prof.ese_balance, level: prof.level }));
-    }
-  }, [userData, actions, showPopup]); // eslint-disable-line
-
-  // ── Legacy stubs kept for ActionDetailsModal compatibility ────────────────
-  const completeAction = async (action: any) => {
-    if (action.status === 'concluido') return;
-
-    const nowIso = new Date().toISOString();
-
-    // A. Update status no Supabase
-    const { error } = await supabase.from('actions').update({ status: 'concluido', completed_at: nowIso }).eq('id', action.id);
-    if (error) {
-      alert("Falha ao atualizar ação.");
-      return;
-    }
-
-    // A2. Atualiza estado local otimistamente
-    setActions(prev => prev.map(a => a.id === action.id ? { ...a, status: 'concluido', completed_at: nowIso } : a));
-
-    // B. Gamificação refletindo instantaneamente
-    if (!userData?.id) return;
-
-    let notificationsTriggered = false;
-
-    const xpReward = Number(action.xp_reward || 0);
-    const eseReward = Number(action.ese_reward || 0);
-
-    // Captura o nível ANTES de adicionar o XP
-    const oldLevel = calculateLevelInfo(userData.xp || 0).level;
-
-    const newXp = (userData.xp || 0) + xpReward;
-    const newEse = (userData.ese || 0) + eseReward;
-    const levelInfo = calculateLevelInfo(newXp);
-
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .update({ xp: newXp, ese_balance: newEse, level: levelInfo.level })
-      .eq('id', userData.id);
-
-    if (!profileError) {
-      setUserData((prev: any) => ({
-        ...prev,
-        xp: newXp,
-        ese: newEse,
-        level: levelInfo.level
-      }));
-    }
-
-    // 🎉 Gatilho: Level Up da Persona
-    if (levelInfo.level > oldLevel) {
-      const lvlTitle = '🎉 LEVEL UP!';
-      const lvlMsg = `Sua Persona atingiu o Nível ${levelInfo.level}! Continue evoluindo.`;
-      await supabase.from('notifications').insert({
-        user_id: userData.id,
-        title: lvlTitle,
-        message: lvlMsg,
-        type: 'level_up',
-        read: false,
-      });
-      showPopup(lvlTitle, lvlMsg, 'level_up');
-      notificationsTriggered = true;
-    }
-
-    // C. Gamificação do Pilar
-    const pilarImpact = Number(action.pilar_impact || 0);
-    const pilarName = action.pillar || action.pilar;
-    if (pilarName && pilarImpact > 0) {
-      const { data: pillarData } = await supabase
-        .from('pillars')
-        .select('*')
-        .eq('user_id', userData.id)
-        .ilike('name', pilarName)
+      // Refetch profile, actions, pillars, radar to sync state after undo
+      await Promise.all([
+        fetchActions(userData.id),
+        fetchPillars(userData.id),
+        fetchRadarData(userData.id),
+      ]);
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('xp, ese_balance, level, offensive_days, last_active_date, hp')
+        .eq('id', userData.id)
         .single();
-
-      if (pillarData) {
-        const currentProgress = Number(pillarData.progress || 0);
-        const currentLevel = Number(pillarData.level || 1);
-
-        let finalProgress = currentProgress + pilarImpact;
-        let finalLevel = currentLevel;
-
-        if (finalProgress >= 100) {
-          finalLevel += Math.floor(finalProgress / 100);
-          finalProgress = finalProgress % 100;
-        }
-
-        await supabase
-          .from('pillars')
-          .update({ progress: finalProgress, level: finalLevel })
-          .eq('id', pillarData.id);
-
-        await fetchPillars(userData.id);
-
-        // 📈 Gatilho: Level Up do Pilar
-        if (finalLevel > currentLevel) {
-          const plTitle = '📈 PILAR EVOLUIU!';
-          const plMsg = `O pilar "${pilarName}" atingiu o Nível ${finalLevel}! Incrível progresso.`;
-          await supabase.from('notifications').insert({
-            user_id: userData.id,
-            title: plTitle,
-            message: plMsg,
-            type: 'pilar_up',
-            read: false,
-          });
-          showPopup(plTitle, plMsg, 'pilar_up');
-          notificationsTriggered = true;
-        }
-      }
-    }
-
-    // D. Gamificação do Eixo de Sacrifícios (Radar Fixo)
-    const radarImpact = Number(action.radar_impact || 0);
-    if (action.sacrifice_priority && radarImpact > 0) {
-      const { data: radarPilar } = await supabase
-        .from('grafico_sacrificios')
-        .select('*')
-        .eq('user_id', userData.id)
-        .eq('prioridade', action.sacrifice_priority)
-        .single();
-
-      if (radarPilar) {
-        const currentValor = Number(radarPilar.valor || 0);
-        const newValor = Math.min(100, currentValor + radarImpact);
-
-        await supabase
-          .from('grafico_sacrificios')
-          .update({ valor: newValor })
-          .eq('id', radarPilar.id);
-      } else {
-        await supabase
-          .from('grafico_sacrificios')
-          .insert({
-            user_id: userData.id,
-            prioridade: action.sacrifice_priority,
-            valor: Math.min(100, 50 + radarImpact)
-          });
-      }
-      await fetchRadarData(userData.id);
-    }
-
-    // F. Motor de Ofensiva (apenas para Diárias)
-    if (action.type === 'diaria') {
-      const todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD local
-      if (userData.last_active_date !== todayStr) {
-        const newOfensiva = (userData.offensive_days || 0) + 1;
-        await supabase
-          .from('profiles')
-          .update({ offensive_days: newOfensiva, last_active_date: todayStr })
-          .eq('id', userData.id);
+      if (prof) {
         setUserData((prev: any) => ({
           ...prev,
-          offensive_days: newOfensiva,
-          last_active_date: todayStr,
+          xp: prof.xp,
+          ese: prof.ese_balance,
+          level: prof.level,
+          offensive_days: prof.offensive_days,
+          last_active_date: prof.last_active_date,
+          hp: prof.hp,
         }));
-        // Notificar em dias especiais: 1, 2, 3 ou múltiplos de 7
-        if ([1, 2, 3].includes(newOfensiva) || newOfensiva % 7 === 0) {
-          const offTitle = '🔥 MINHA OFENSIVA!';
-          const offMsg = `Você atingiu ${newOfensiva} dia${newOfensiva > 1 ? 's' : ''} seguido${newOfensiva > 1 ? 's' : ''}!`;
-          await supabase.from('notifications').insert({
-            user_id: userData.id,
-            title: offTitle,
-            message: offMsg,
-            type: 'ofensiva',
-            read: false,
-          });
-          showPopup(offTitle, offMsg, 'ofensiva');
-          notificationsTriggered = true;
-        }
       }
     }
-
-    // G. Atualizar notificações se algum gatilho foi disparado
-    if (notificationsTriggered) {
-      await fetchNotifications(userData.id);
-    }
-  };
-
-  const undoAction = async (action: any) => {
-    try {
-      if (action.status !== 'concluido') return;
-
-      const { error } = await supabase.from('actions').update({ status: 'pendente', completed_at: null }).eq('id', action.id);
-      if (error) {
-        console.error('Erro ao atualizar status:', error);
-        alert("Falha ao reverter ação no banco.");
-        return;
-      }
-
-      // Antes de subtrair, faça um SELECT do perfil do usuário para pegar o xp e ese_balance atuais
-      const { data: profile, error: profileFetchError } = await supabase
-        .from('profiles')
-        .select('xp, ese_balance')
-        .eq('id', action.user_id || userData?.id)
-        .single();
-
-      if (profileFetchError) throw profileFetchError;
-
-      const xpReward = Number(action.xp_reward || 0);
-      const eseReward = Number(action.ese_reward || 0);
-      const pilarImpact = Number(action.pilar_impact || 0);
-      const radarImpact = Number(action.radar_impact || 0);
-
-      const newXp = Math.max(0, (profile?.xp || 0) - xpReward);
-      const newEse = Math.max(0, (profile?.ese_balance || 0) - eseReward);
-      const levelInfo = calculateLevelInfo(newXp);
-
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .update({ xp: newXp, ese_balance: newEse, level: levelInfo.level })
-        .eq('id', action.user_id || userData?.id);
-
-      if (profileError) throw profileError;
-
-      // Reverter Pilar
-      const pilarName = action.pillar || action.pilar;
-      if (pilarName && pilarImpact > 0) {
-        const { data: pillarData } = await supabase
-          .from('pillars')
-          .select('*')
-          .eq('user_id', action.user_id || userData?.id)
-          .ilike('name', pilarName)
-          .single();
-
-        if (pillarData) {
-          const currentProgress = Number(pillarData.progress || 0);
-          const currentLevel = Number(pillarData.level || 1);
-
-          let finalProgress = currentProgress - pilarImpact;
-          let finalLevel = currentLevel;
-
-          if (finalProgress < 0) {
-            if (finalLevel > 1) {
-              const levelsLost = Math.ceil(Math.abs(finalProgress) / 100);
-              finalLevel = Math.max(1, finalLevel - levelsLost);
-              finalProgress = 100 - (Math.abs(finalProgress) % 100);
-              if (finalProgress === 100) finalProgress = 0;
-            } else {
-              finalProgress = 0;
-            }
-          }
-
-          await supabase
-            .from('pillars')
-            .update({ progress: finalProgress, level: finalLevel })
-            .eq('id', pillarData.id);
-
-          await fetchPillars(action.user_id || userData?.id);
-        }
-      }
-
-      // Reverter Gráfico de Sacrifícios
-      if (action.sacrifice_priority && radarImpact > 0) {
-        const { data: radarPilar } = await supabase
-          .from('grafico_sacrificios')
-          .select('*')
-          .eq('user_id', action.user_id || userData?.id)
-          .eq('prioridade', action.sacrifice_priority)
-          .single();
-
-        if (radarPilar) {
-          const currentValor = Number(radarPilar.valor || 0);
-          const newValor = Math.max(0, currentValor - radarImpact);
-
-          await supabase
-            .from('grafico_sacrificios')
-            .update({ valor: newValor })
-            .eq('id', radarPilar.id);
-
-          await fetchRadarData(action.user_id || userData?.id);
-        }
-      }
-
-      // C. Atualizar Interface puxando novos dados via fetchActions
-      await fetchActions(action.user_id || userData?.id);
-
-      setUserData((prev: any) => ({
-        ...prev,
-        xp: newXp,
-        ese: newEse
-      }));
-
-    } catch (error) {
-      console.error('Erro ao desfazer ação:', error);
-      alert('Houve um erro ao tentar reverter a ação e descontar a recompensa.');
-    }
-  };
+  }, [userData, actions, showPopup]); // eslint-disable-line
 
   // --- Filtros de Tempo (24h) ---
   const now = new Date();
@@ -945,7 +690,7 @@ export default function App() {
 
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <button
-                          onClick={() => undoAction(action)}
+                          onClick={() => handleStatusChange(action.id, 'pendente')}
                           className="p-2 bg-green-500/10 rounded-full text-green-400 hover:text-white hover:bg-green-500 transition-colors shadow-sm border border-transparent hover:border-green-500"
                           title="Desfazer (Reverter)"
                         >
