@@ -13,7 +13,7 @@ import { BottomNav } from '@/src/components/ui/BottomNav';
 import { ActionFormModal } from '@/src/components/ferramenta/ActionFormModal';
 import { AcaoCard } from '@/src/components/ferramenta/AcaoCard';
 import { FolderManager } from '@/src/components/ferramenta/FolderManager';
-import { completeAction, undoAction } from '@/src/lib/gamification/actionEngine';
+import { completeAction, undoAction, applyPenalty } from '@/src/lib/gamification/actionEngine';
 import { fetchActionsWithRelations } from '@/src/lib/actions/actionService';
 import { fetchFoldersForUser } from '@/src/lib/actions/folderService';
 import { getDescendantFolderIds, getFolderPathLabel } from '@/src/components/prototypes/folderUtils';
@@ -89,6 +89,35 @@ export default function CategoriaPage() {
       setActions(allActions);
       setPillars(pilRes.data ?? []);
       setFolders(foldersRes ?? []);
+
+      // Verificação automática de penalidades vencidas (Item 3)
+      const now = new Date();
+      const overdueActions = allActions.filter((a) => {
+        if (!a.penalty_active || a.penalty_applied || a.status === 'concluido' || !a.due_date) return false;
+        const dueDateTimeStr = a.due_time
+          ? `${a.due_date}T${a.due_time}:00`
+          : a.due_date.includes('T')
+          ? a.due_date
+          : `${a.due_date}T23:59:59`;
+        const dueDate = new Date(dueDateTimeStr);
+        return !isNaN(dueDate.getTime()) && dueDate < now;
+      });
+
+      if (overdueActions.length > 0) {
+        let anyPenalized = false;
+        for (const act of overdueActions) {
+          try {
+            const penRes = await applyPenalty(act.id);
+            if (penRes.ok) anyPenalized = true;
+          } catch (err) {
+            console.warn('[AutoPenalty] Erro em categoria/page:', act.id, err);
+          }
+        }
+        if (anyPenalized) {
+          const reloaded = await fetchActionsWithRelations(uid);
+          setActions(reloaded);
+        }
+      }
     } catch (e: any) {
       console.error(e);
       setError('Erro ao carregar as ações. Verifique sua conexão.');

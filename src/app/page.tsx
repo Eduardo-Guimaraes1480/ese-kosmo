@@ -21,7 +21,11 @@ import { ActionFormModal } from '@/src/components/ferramenta/ActionFormModal';
 import { EditProfileModal } from '@/src/components/ferramenta/EditProfileModal';
 import { EditPillarsModal } from '@/src/components/ferramenta/EditPillarsModal';
 import { AcaoCard } from '@/src/components/ferramenta/AcaoCard';
-import { completeAction as engineComplete, undoAction as engineUndo } from '@/src/lib/gamification/actionEngine';
+import {
+  completeAction as engineComplete,
+  undoAction as engineUndo,
+  applyPenalty as engineApplyPenalty,
+} from '@/src/lib/gamification/actionEngine';
 import { fetchActionsWithRelations } from '@/src/lib/actions/actionService';
 
 
@@ -102,6 +106,53 @@ export default function App() {
     try {
       const fetchedActions = await fetchActionsWithRelations(userId);
       setActions(fetchedActions);
+
+      // Verificação automática de penalidades vencidas (Item 3)
+      const now = new Date();
+      const overdueActions = fetchedActions.filter((a) => {
+        if (!a.penalty_active || a.penalty_applied || a.status === 'concluido' || !a.due_date) return false;
+        const dueDateTimeStr = a.due_time
+          ? `${a.due_date}T${a.due_time}:00`
+          : a.due_date.includes('T')
+          ? a.due_date
+          : `${a.due_date}T23:59:59`;
+        const dueDate = new Date(dueDateTimeStr);
+        return !isNaN(dueDate.getTime()) && dueDate < now;
+      });
+
+      if (overdueActions.length > 0) {
+        let anyPenalized = false;
+        for (const act of overdueActions) {
+          try {
+            const penRes = await engineApplyPenalty(act.id, showPopup);
+            if (penRes.ok) {
+              anyPenalized = true;
+              showPopup(
+                '⚠️ PENALIDADE APLICADA',
+                `O prazo da ação "${act.title}" expirou. Penalidade de HP/E$E debitada.`,
+                'penalty'
+              );
+            }
+          } catch (err) {
+            console.warn('[AutoPenalty] Erro ao aplicar penalidade em ação:', act.id, err);
+          }
+        }
+        if (anyPenalized) {
+          const [reloadedActions, profRes] = await Promise.all([
+            fetchActionsWithRelations(userId),
+            supabase.from('profiles').select('hp, ese_balance').eq('id', userId).maybeSingle(),
+          ]);
+          setActions(reloadedActions);
+          const profData = profRes.data as { hp?: number; ese_balance?: number } | null;
+          if (profData) {
+            setUserData((prev: any) => ({
+              ...prev,
+              hp: profData.hp ?? prev.hp,
+              ese: profData.ese_balance ?? prev.ese,
+            }));
+          }
+        }
+      }
     } catch (error) {
       console.error('Erro ao buscar ações com relações:', error);
     }
@@ -296,6 +347,7 @@ export default function App() {
           ese: profile?.ese_balance || 0,
           offensive_days: profile?.offensive_days || 0,
           last_active_date: profile?.last_active_date || null,
+          plano: profile?.plano || 'free',
         });
 
         await fetchActions(session.user.id);

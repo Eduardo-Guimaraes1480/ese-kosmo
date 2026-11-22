@@ -13,9 +13,7 @@ export type ManagementStatus =
   | 'em_andamento'
   | 'concluido'
   | 'atrasado'
-  | 'transferido'
-  | 'pausado_futuro'
-  | 'atrasado_pendente';
+  | 'transferido';
 
 export type SacrificePriority =
   | 'Saúde'
@@ -102,6 +100,8 @@ export interface ActionItem {
   requirements?: LinkedRequirement[];
   subtasks?: SimpleSubtask[];
   penalties?: PenaltyConfig;
+  penalty_active?: boolean;
+  penalty_applied?: boolean;
   new_vocation?: string;
   vocation_bonus?: string;
   vocation_icon?: 'code' | 'brain' | 'coins' | 'sparkles' | 'trophy' | 'flame';
@@ -233,18 +233,6 @@ export const MANAGEMENT_STATUS_MAP: Record<ManagementStatus, StatusMeta> = {
     description:
       'Tarefa não urgente mas importante, registrada na cor roxa para ser praticada futuramente ou retomada após pausa.',
   },
-  pausado_futuro: {
-    id: 'pausado',
-    label: 'Pausado/Futuro',
-    shortLabel: 'Pausado',
-    dotClass: 'bg-purple-500',
-    ringClass: 'ring-purple-500/30',
-    textClass: 'text-purple-400',
-    badgeClass: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
-    hex: '#A855F7',
-    description:
-      'Tarefa não urgente mas importante, registrada na cor roxa para ser praticada futuramente ou retomada após pausa.',
-  },
   em_andamento: {
     id: 'em_andamento',
     label: 'Em andamento',
@@ -270,18 +258,6 @@ export const MANAGEMENT_STATUS_MAP: Record<ManagementStatus, StatusMeta> = {
       'Significa que a atividade já foi concluída, pronta para o check final na caixa de verificação.',
   },
   atrasado: {
-    id: 'atrasado',
-    label: 'Atrasado/Pendente',
-    shortLabel: 'Atrasado',
-    dotClass: 'bg-red-500',
-    ringClass: 'ring-red-500/30',
-    textClass: 'text-red-400',
-    badgeClass: 'bg-red-500/15 text-red-300 border-red-500/30',
-    hex: '#EF4444',
-    description:
-      'Ativa automaticamente ao ultrapassar o prazo de dia/hora estipulado, deixando evidente que a tarefa está atrasada.',
-  },
-  atrasado_pendente: {
     id: 'atrasado',
     label: 'Atrasado/Pendente',
     shortLabel: 'Atrasado',

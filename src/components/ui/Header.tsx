@@ -22,6 +22,16 @@ interface HeaderProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+function getInitials(name: string): string {
+  if (!name || name === '—') return 'K';
+  const clean = name.replace(/@.*/, '').trim();
+  const parts = clean.split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return clean.slice(0, 2).toUpperCase();
+}
+
 export const Header = ({
   title,
   badge,
@@ -45,7 +55,7 @@ export const Header = ({
     if (!user) return;
     const { data: profile } = await supabase
       .from('profiles')
-      .select('nickname, vocation, level, xp, ese_balance, hp')
+      .select('nickname, vocation, level, xp, ese_balance, hp, plano, offensive_days')
       .eq('id', user.id)
       .single();
     if (profile) {
@@ -57,6 +67,8 @@ export const Header = ({
         xp: profile.xp ?? 0,
         hp: profile.hp ?? 100,
         ese: profile.ese_balance ?? 0,
+        plano: profile.plano || 'free',
+        offensive_days: profile.offensive_days ?? 0,
       });
     }
     // Fetch unread notifications
@@ -79,6 +91,10 @@ export const Header = ({
   const displayName        = resolvedUser?.name || resolvedUser?.nickname || '—';
   const displayXp          = resolvedUser?.xp ?? resolvedUser?.xp_total ?? 0;
   const displayLevel       = calculateLevelInfo(displayXp).level;
+  const displayPlan        = (resolvedUser?.plano || resolvedUser?.plan || 'free').toLowerCase();
+  const displayHp          = resolvedUser?.hp ?? 100;
+  const displayStreak      = resolvedUser?.offensive_days ?? resolvedUser?.streak_days ?? 0;
+  const displayInitials    = getInitials(displayName);
   const selfUnread         = notifications.filter(n => !n.read).length;
   const resolvedUnread     = unreadCountProp ?? selfUnread;
 
@@ -97,23 +113,45 @@ export const Header = ({
   return (
     <div className="flex-shrink-0 relative">
       {/* ── Mobile Header (< lg) ────────────────────────────────────────── */}
-      <header className="lg:hidden flex items-center justify-between p-4 border-b border-white/5 bg-ese-black/50 backdrop-blur-md z-20">
+      <header className="lg:hidden flex items-center justify-between p-3.5 border-b border-white/5 bg-ese-black/50 backdrop-blur-md z-20 gap-2">
         <div
-          className="w-10 h-10 rounded-full bg-ese-gray/50 flex items-center justify-center border border-white/10 cursor-pointer hover:bg-white/10 transition-colors"
+          className="flex items-center gap-2 cursor-pointer hover:opacity-85 transition-opacity min-w-0"
           onClick={handleProfileClick}
-          title="Perfil"
+          title="Ver detalhes da Persona"
         >
-          <User className="w-5 h-5 text-gray-300" />
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#4850FF] to-[#01055B] border border-[#98A9FF]/40 flex items-center justify-center text-xs font-black text-white shrink-0">
+            {displayInitials}
+          </div>
+          <div className="flex flex-col leading-tight min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-xs font-bold text-white truncate max-w-[95px]">{displayName}</span>
+              <span
+                className={cn(
+                  'px-1 py-0.2 rounded text-[8px] font-black uppercase tracking-wider shrink-0',
+                  displayPlan === 'ultra'
+                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                    : displayPlan === 'pro'
+                    ? 'bg-[#4850FF]/20 text-[#98A9FF] border border-[#4850FF]/40'
+                    : 'bg-white/10 text-gray-300 border border-white/10'
+                )}
+              >
+                {displayPlan.toUpperCase()}
+              </span>
+            </div>
+            <span className="text-[10px] text-[#98A9FF] font-semibold tabular-nums truncate">
+              NVL {displayLevel} · {displayHp} HP · {displayStreak}d
+            </span>
+          </div>
         </div>
 
-        <div className="text-center">
-          <h1 className="font-heading font-bold text-lg tracking-widest uppercase">{title}</h1>
+        <div className="text-center min-w-0 flex-1">
+          <h1 className="font-heading font-bold text-sm tracking-widest uppercase truncate">{title}</h1>
           {badge && (
-            <span className="text-[9px] font-bold text-gray-500 tracking-widest uppercase">{badge}</span>
+            <span className="text-[8px] font-bold text-gray-500 tracking-widest uppercase truncate block">{badge}</span>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={handleBellClick}
             className="relative p-2 text-gray-300 hover:text-white transition-colors"
@@ -151,17 +189,42 @@ export const Header = ({
             )}
           </button>
 
+          {/* Card Harmônico de Persona Oficial (Foto 1 — Item 4) */}
           <div
-            className="flex items-center gap-4 cursor-pointer hover:bg-white/5 transition-colors p-2 rounded-xl"
+            className="flex items-center gap-3 bg-[#121619] border border-white/10 rounded-xl px-3 py-1.5 cursor-pointer hover:border-white/20 transition-all"
             onClick={handleProfileClick}
-            title="Editar Persona"
+            title="Clique para ver detalhes e editar sua Persona"
           >
-            <div className="text-right">
-              <div className="text-sm font-bold text-ese-blue-light">{displayName}</div>
-              <div className="text-xs text-gray-400">Nível {displayLevel}</div>
+            <div className="text-right space-y-0.5">
+              <div className="flex items-center justify-end gap-2 text-xs">
+                <span className="font-bold text-white">{displayName}</span>
+                <span
+                  className={cn(
+                    'px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider',
+                    displayPlan === 'ultra'
+                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                      : displayPlan === 'pro'
+                      ? 'bg-[#4850FF]/20 text-[#98A9FF] border border-[#4850FF]/40'
+                      : 'bg-white/10 text-gray-300 border border-white/10'
+                  )}
+                >
+                  {displayPlan.toUpperCase()}
+                </span>
+                <span className="text-[#98A9FF] font-mono font-bold tabular-nums">
+                  NVL {displayLevel}
+                </span>
+              </div>
+              <div className="flex items-center justify-end gap-2.5 text-[10px] tabular-nums">
+                <span className="flex items-center gap-1 text-red-400 font-bold">
+                  ❤️ {displayHp}/100 HP
+                </span>
+                <span className="text-orange-400 font-bold">
+                  🔥 {displayStreak}d Ofensiva
+                </span>
+              </div>
             </div>
-            <div className="w-12 h-12 rounded-full bg-ese-gray/80 flex items-center justify-center border border-white/20">
-              <User className="w-6 h-6 text-gray-300" />
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#4850FF] to-[#01055B] border border-[#98A9FF]/40 flex items-center justify-center text-xs font-black text-white shrink-0">
+              {displayInitials}
             </div>
           </div>
         </div>

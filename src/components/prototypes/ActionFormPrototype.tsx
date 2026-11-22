@@ -118,8 +118,8 @@ export function buildDraftTab(
     selectedSacrifices: action?.sacrifice_priorities?.length
       ? action.sacrifice_priorities
       : ['Saúde'],
-    dueDate: action?.due_date ?? '2026-11-21',
-    dueTime: action?.due_time ?? (t === 'meta' || t === 'boss' || t === 'conquista' ? '' : '21:00'),
+    dueDate: action?.due_date ?? new Date().toISOString().split('T')[0],
+    dueTime: action?.due_time ?? '',
     folderIds: action?.folderIds ? [...action.folderIds] : [...fallbackFolderIds],
     refCategory: action?.reference_type ?? 'nenhum',
     refSearch: '',
@@ -656,7 +656,7 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
       title: activeTab.title.trim(),
       description: activeTab.description.trim(),
       type: activeTab.type,
-      status: activeTab.managementStatus === 'concluido' ? 'concluido' : 'pendente',
+      status: sourceAction?.status ?? 'pendente',
       management_status: activeTab.managementStatus,
       pillars: activeTab.selectedPillars,
       sacrifice_priorities: activeTab.selectedSacrifices,
@@ -736,10 +736,7 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
       vocation_icon:
         sourceAction?.vocation_icon ?? (activeTab.type === 'boss' ? 'flame' : 'sparkles'),
       created_at: sourceAction?.created_at ?? new Date().toISOString(),
-      completed_at:
-        activeTab.managementStatus === 'concluido'
-          ? sourceAction?.completed_at ?? new Date().toISOString()
-          : null,
+      completed_at: sourceAction?.completed_at ?? null,
     };
 
     const inlineCreatedFazers: ActionItem[] =
@@ -2181,8 +2178,7 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
                     title: activeTab.title,
                     description: activeTab.description,
                     type: activeTab.type,
-                    status:
-                      activeTab.managementStatus === 'concluido' ? 'concluido' : 'pendente',
+                    status: 'pendente',
                     management_status: activeTab.managementStatus,
                     pillars: activeTab.selectedPillars,
                     sacrifice_priorities: activeTab.selectedSacrifices,

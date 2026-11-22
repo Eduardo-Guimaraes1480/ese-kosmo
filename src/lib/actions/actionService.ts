@@ -201,16 +201,23 @@ export async function fetchActionsWithRelations(userId: string): Promise<ActionI
       : undefined;
 
     // Data/hora de vencimento
-    let dueDate = '2026-11-21';
-    let dueTime = '21:00';
+    let dueDate = '';
+    let dueTime = '';
     if (raw.due_date) {
       if (raw.due_date.includes('T')) {
         const parts = raw.due_date.split('T');
         dueDate = parts[0];
-        dueTime = parts[1].slice(0, 5);
+        const timePart = parts[1].slice(0, 5);
+        if (timePart !== '23:59') {
+          dueTime = timePart;
+        }
       } else {
         dueDate = raw.due_date;
       }
+    }
+    // Fallback para schedule se dueTime não foi definido no timestamp
+    if (!dueTime && schedule?.times_of_day?.[0]) {
+      dueTime = schedule.times_of_day[0];
     }
 
     return {
@@ -239,6 +246,8 @@ export async function fetchActionsWithRelations(userId: string): Promise<ActionI
       requirements: requirements.length ? requirements : undefined,
       subtasks: subtasks.length ? subtasks : undefined,
       penalties,
+      penalty_active: raw.penalty_active ?? false,
+      penalty_applied: raw.penalty_applied ?? false,
       new_vocation: raw.unlocked_vocation || undefined,
       vocation_bonus: raw.unlocked_vocation
         ? `(+15%) ${raw.unlocked_vocation.toUpperCase()}`
@@ -272,7 +281,7 @@ export async function saveActionWithRelations(
   const penaltyHp = draft.type === 'boss' ? 20 : draft.type === 'problema' ? 5 : 0;
 
   const dueIso = draft.dueDate
-    ? `${draft.dueDate}T${draft.dueTime ? `${draft.dueTime}:00` : '23:59:59'}`
+    ? `${draft.dueDate}T${draft.dueTime && draft.dueTime.trim() ? `${draft.dueTime.trim().padStart(5, '0')}:00` : '23:59:59'}`
     : null;
 
   const actionPayload = {
@@ -280,7 +289,8 @@ export async function saveActionWithRelations(
     title: draft.title.trim(),
     description: draft.description.trim() || null,
     type: draft.type,
-    status: mgmtStatus === 'concluido' ? 'concluido' : 'pendente',
+    // Status gamificado é desacoplado do status gerencial. Novas ações iniciam como 'pendente'.
+    status: 'pendente' as const,
     management_status: mgmtStatus,
     pillar: primaryPillar,
     sacrifice_priority: primarySacrifice,
@@ -305,10 +315,12 @@ export async function saveActionWithRelations(
   let targetActionId: string;
 
   if (sourceActionId) {
-    // Atualização de ação existente
+    // Atualização de ação existente: NÃO sobrescrever o status gamificado já existente
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { status: _ignoreStatus, ...updatePayload } = actionPayload;
     const { error: updateError } = await supabase
       .from('actions')
-      .update(actionPayload)
+      .update(updatePayload)
       .eq('id', sourceActionId)
       .eq('user_id', userId);
 
@@ -590,7 +602,21 @@ export async function deleteActionWithRelations(
     throw new Error('Ações de sistema (como marcos de nível e conquistas automáticas) não podem ser excluídas.');
   }
 
-  // 2. Exclusão no Supabase (deleções em cascata cuidam de subtasks, schedules e links)
+  // 2. Limpar referências em action_requirements (onde é pai ou requisito vinculado) para evitar violação de FK
+  await supabase
+    .from('action_requirements')
+    .delete()
+    .eq('user_id', userId)
+    .or(`parent_action_id.eq.${actionId},req_action_id.eq.${actionId}`);
+
+  // 3. Limpar vínculos em action_folder_items
+  await supabase
+    .from('action_folder_items')
+    .delete()
+    .eq('user_id', userId)
+    .eq('action_id', actionId);
+
+  // 4. Exclusão no Supabase (deleções em cascata cuidam de subtasks, schedules)
   const { error } = await supabase
     .from('actions')
     .delete()

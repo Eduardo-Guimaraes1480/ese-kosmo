@@ -18,7 +18,6 @@ import {
   MoreVertical,
   CheckSquare,
   Square,
-  Download,
   Menu,
   X,
   Heart,
@@ -61,7 +60,13 @@ import {
   syncActionFolders,
   assignActionToFolder,
 } from '@/src/lib/actions/folderService';
-import { completeAction, undoAction } from '@/src/lib/gamification/actionEngine';
+import {
+  completeAction,
+  undoAction,
+  applyPenalty,
+} from '@/src/lib/gamification/actionEngine';
+import { Sidebar } from '@/src/components/ui/Sidebar';
+import { EditProfileModal } from '@/src/components/ferramenta/EditProfileModal';
 import { PlanType, UserPlanInfo } from '@/src/types/ese-kosmo';
 import { getUserPlanInfo, applyPlanHistoryLimit } from '@/src/lib/plans/planService';
 import { PlanUpgradeModal } from '@/src/components/ferramenta/PlanUpgradeModal';
@@ -475,6 +480,7 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
   const [planInfo, setPlanInfo] = useState<UserPlanInfo | null>(null);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState<boolean>(false);
   const [upgradeModalReason, setUpgradeModalReason] = useState<string | undefined>(undefined);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
   // Navigation between Hub Home (/acoes), Windows Explorer, and Workspace
   const [hubSection, setHubSection] = useState<HubSection>(initialSection);
@@ -570,6 +576,52 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
 
       setActions(actionsData);
       setFolders(foldersData);
+
+      // Verificação automática de penalidades vencidas (Item 3)
+      const now = new Date();
+      const overdueActions = actionsData.filter((a) => {
+        if (!a.penalty_active || a.penalty_applied || a.status === 'concluido' || !a.due_date) return false;
+        const dueDateTimeStr = a.due_time
+          ? `${a.due_date}T${a.due_time}:00`
+          : a.due_date.includes('T')
+          ? a.due_date
+          : `${a.due_date}T23:59:59`;
+        const dueDate = new Date(dueDateTimeStr);
+        return !isNaN(dueDate.getTime()) && dueDate < now;
+      });
+
+      if (overdueActions.length > 0) {
+        let anyPenalized = false;
+        for (const act of overdueActions) {
+          try {
+            const penRes = await applyPenalty(act.id);
+            if (penRes.ok) {
+              anyPenalized = true;
+              showEphemeralToast(
+                '⚠️ Penalidade Aplicada',
+                `Prazo da ação "${act.title}" expirou. HP reduzido.`
+              );
+            }
+          } catch (err) {
+            console.warn('[AutoPenalty] Erro ao aplicar penalidade em ação:', act.id, err);
+          }
+        }
+        if (anyPenalized) {
+          const [reloadedActions, reloadedProf] = await Promise.all([
+            fetchActionsWithRelations(uid),
+            supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
+          ]);
+          setActions(reloadedActions);
+          const profData = reloadedProf.data as { hp?: number; ese_balance?: number } | null;
+          if (profData) {
+            setUserStats((prev) => ({
+              ...prev,
+              hp: profData.hp ?? prev.hp,
+              ese_total: profData.ese_balance ?? prev.ese_total,
+            }));
+          }
+        }
+      }
 
       // Expandir pastas raízes por padrão
       const expanded: Record<string, boolean> = {};
@@ -1113,10 +1165,9 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
         setSelectedFolderId(created.id);
         setNewFolderName('');
         setShowNewFolderInput(false);
-        pushImportantNotification(
+        showEphemeralToast(
           parentIdToUse ? 'Subpasta criada' : 'Pasta criada',
-          getFolderPathLabel([...folders, created], created.id),
-          'folder'
+          getFolderPathLabel([...folders, created], created.id)
         );
         return;
       } catch (err) {
@@ -1141,10 +1192,9 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
     setSelectedFolderId(created.id);
     setNewFolderName('');
     setShowNewFolderInput(false);
-    pushImportantNotification(
+    showEphemeralToast(
       parentIdToUse ? 'Subpasta criada' : 'Pasta criada',
-      getFolderPathLabel([...folders, created], created.id),
-      'folder'
+      getFolderPathLabel([...folders, created], created.id)
     );
   };
 
@@ -1162,7 +1212,7 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
 
     setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, name: clean } : f)));
     setRenamingFolderId(null);
-    pushImportantNotification('Pasta renomeada', clean, 'folder');
+    showEphemeralToast('Pasta renomeada', clean);
   };
 
   const handleDeleteFolder = async (folderId: string) => {
@@ -1187,10 +1237,9 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
     if (selectedFolderId !== 'all' && selectedFolderId !== 'loose' && toRemoveIds.has(selectedFolderId)) {
       setSelectedFolderId('all');
     }
-    pushImportantNotification(
+    showEphemeralToast(
       'Pasta removida',
-      `${target?.name ?? 'Pasta'} e subpastas removidas.`,
-      'folder'
+      `${target?.name ?? 'Pasta'} e subpastas removidas.`
     );
   };
 
@@ -1531,103 +1580,15 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
 
   return (
     <div className="flex h-screen bg-[#0B0F10] text-[#FEFEFE] font-sans overflow-hidden">
-      {/* Mobile Sidebar Overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Left Sidebar */}
-      <aside
-        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-[#07090a] border-r border-white/5 flex flex-col transition-transform duration-200 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        }`}
-      >
-        <div className="p-5 flex items-center justify-between border-b border-white/5">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#01055B] border border-[#4850FF]/50 flex items-center justify-center">
-              <Sparkles className="w-4 h-4 text-[#98A9FF]" />
-            </div>
-            <span className="font-heading font-black text-base tracking-widest text-white">
-              ESE KOSMO
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(false)}
-            className="lg:hidden p-1.5 text-gray-400 hover:text-white"
-            aria-label="Fechar menu"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {SIDEBAR_NAV.map((item) => {
-            const NavIcon = item.icon;
-            const active = activeNav === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setActiveNav(item.id);
-                  setSidebarOpen(false);
-                  if (item.id === 'acoes') {
-                    setHubSection('hub');
-                  } else if (item.id === 'home') {
-                    router.push('/dashboard');
-                  } else if (item.id === 'loja') {
-                    router.push('/loja');
-                  } else if (item.id === 'equipe') {
-                    router.push('/equipe');
-                  } else if (item.id === 'social' || item.id === 'comunidade') {
-                    router.push('/home');
-                  } else if (item.id === 'config') {
-                    router.push('/configuracoes');
-                  }
-                }}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                  active
-                    ? 'bg-[#4850FF]/15 text-white border border-[#4850FF]/30'
-                    : 'text-gray-400 hover:text-white hover:bg-white/5 border border-transparent'
-                }`}
-              >
-                <NavIcon
-                  className={`w-4 h-4 shrink-0 ${active ? 'text-[#98A9FF]' : 'text-gray-500'}`}
-                />
-                <span className="truncate">{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="p-4 border-t border-white/5 space-y-2.5">
-          <a
-            href="/ese-kosmo-acoes-standalone.html"
-            download="ese-kosmo-acoes-index.html"
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.08] border border-white/10 text-[11px] font-semibold text-gray-400 hover:text-white transition-colors"
-            title="Exportar versão standalone em arquivo único HTML"
-          >
-            <Download className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Baixar index.html (Demo)</span>
-          </a>
-
-          <button
-            type="button"
-            onClick={async () => {
-              await supabase.auth.signOut();
-              router.push('/login');
-            }}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>Sair</span>
-          </button>
-        </div>
-      </aside>
+      {/* Sidebar Oficial Unificado (Item 6) */}
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onLogout={async () => {
+          await supabase.auth.signOut();
+          router.push('/login');
+        }}
+      />
 
       {/* Main Content Shell */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
@@ -1765,14 +1726,19 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
               )}
             </div>
 
-            {/* Compact User Persona Card */}
-            <div className="flex items-center gap-2 sm:gap-3 bg-[#121619] border border-white/10 rounded-xl px-2.5 sm:px-3 py-1.5">
+            {/* Compact User Persona Card (Foto 1 — Item 4: Clicável para abrir edição) */}
+            <div
+              className="flex items-center gap-2 sm:gap-3 bg-[#121619] border border-white/10 rounded-xl px-2.5 sm:px-3 py-1.5 cursor-pointer hover:border-white/20 transition-all"
+              onClick={() => setIsProfileModalOpen(true)}
+              title="Clique para ver detalhes e editar sua Persona"
+            >
               <div className="hidden sm:block text-right space-y-0.5">
                 <div className="flex items-center justify-end gap-2 text-xs">
                   <span className="font-bold text-white">{userStats.nickname}</span>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setUpgradeModalReason(undefined);
                       setUpgradeModalOpen(true);
                     }}
@@ -2336,8 +2302,8 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
 
               {/* Windows Explorer Split Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                {/* Left Recursive Folder Tree (Dropzones!) */}
-                <div className="lg:col-span-4 bg-[#111618] border border-white/10 rounded-2xl p-4 space-y-2">
+                {/* Left Recursive Folder Tree (Dropzones! — Sticky no Desktop: Item 8 / Foto 1 Item 2) */}
+                <div className="lg:col-span-4 lg:sticky lg:top-24 lg:self-start bg-[#111618] border border-white/10 rounded-2xl p-4 space-y-2 max-h-[calc(100vh-8rem)] overflow-y-auto">
                   <p className="text-[11px] font-bold uppercase tracking-wider text-gray-400 px-1 pb-1">
                     Árvore Infinita de Pastas (Solte cards aqui)
                   </p>
@@ -3782,8 +3748,8 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
                       {/* SUB-MODE A: Cronologia por Horário com Mini-Calendário + Agendamento Rápido (Item 8) */}
                       {chronologySubMode === 'horario' && (
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                          {/* Mini Monthly Calendar Day Picker */}
-                          <div className="lg:col-span-4 space-y-3">
+                          {/* Mini Monthly Calendar Day Picker (Sticky no Desktop: Item 8 / Foto 1 Item 2) */}
+                          <div className="lg:col-span-4 lg:sticky lg:top-24 lg:self-start space-y-3">
                             <button
                               type="button"
                               onClick={() => setShowChronoCalMobile((v) => !v)}
@@ -4479,6 +4445,31 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
         currentPlan={userPlan}
         reason={upgradeModalReason}
       />
+
+      {/* Edit Profile Modal (Foto 1 — Item 4) */}
+      {isProfileModalOpen && (
+        <EditProfileModal
+          userData={{
+            id: userId,
+            name: userStats.nickname,
+            vocation: userStats.vocacao,
+            level: userStats.level,
+            xp: userStats.xp_total,
+            hp: userStats.hp,
+            ese: userStats.ese_total,
+          }}
+          onClose={() => setIsProfileModalOpen(false)}
+          onSuccess={(updated: any) => {
+            setIsProfileModalOpen(false);
+            setUserStats((prev) => ({
+              ...prev,
+              nickname: updated.nickname || prev.nickname,
+              vocacao: updated.vocation || prev.vocacao,
+            }));
+            showEphemeralToast('Perfil atualizado', 'Suas alterações foram salvas com sucesso.');
+          }}
+        />
+      )}
     </div>
   );
 };
