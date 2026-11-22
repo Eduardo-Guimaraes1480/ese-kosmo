@@ -24,8 +24,13 @@ export interface PlanLimitError {
  * Intercepta mensagens de erro do PostgreSQL (trigger enforce_action_plan_limits / enforce_folder_plan_limits)
  * e formata para exibição clara na interface.
  */
-export function parsePlanErrorMessage(error: any): PlanLimitError {
-  const rawMsg = error?.message || (typeof error === 'string' ? error : '');
+export function parsePlanErrorMessage(error: unknown): PlanLimitError {
+  let rawMsg = '';
+  if (typeof error === 'string') {
+    rawMsg = error;
+  } else if (error && typeof error === 'object' && 'message' in error) {
+    rawMsg = String((error as { message: unknown }).message);
+  }
 
   // Formato: LIMIT_REACHED:<tipo>:<limite>:<mensagem>
   if (rawMsg.includes('LIMIT_REACHED:')) {
@@ -72,26 +77,35 @@ export async function getUserPlanInfo(
     });
 
     if (!error && data) {
-      const raw = data as any;
-      const usage = raw.usage || {};
+      const raw = data as Record<string, unknown>;
+      const usage = (raw.usage as Record<string, unknown>) || {};
 
-      const enrichItem = (item: any, defaultPeriod: 'daily' | 'monthly' | 'total'): PlanTypeUsageItem => {
-        const used = item?.used ?? 0;
-        const limit = item?.limit ?? (isPaid ? null : 10);
+      const enrichItem = (
+        item: unknown,
+        defaultPeriod: 'daily' | 'monthly' | 'total'
+      ): PlanTypeUsageItem => {
+        const itemObj = (item as Record<string, unknown>) || {};
+        const used = typeof itemObj.used === 'number' ? itemObj.used : 0;
+        const limit = typeof itemObj.limit === 'number' ? itemObj.limit : isPaid ? null : 10;
         const percentage = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
         return {
           used,
           limit,
-          period: item?.period || defaultPeriod,
+          period: (itemObj.period as 'daily' | 'monthly' | 'total') || defaultPeriod,
           percentage,
           isNearLimit: limit !== null && percentage >= 80,
           isLimitReached: limit !== null && used >= limit,
         };
       };
 
+      const rawFeatures = (raw.features as Record<string, unknown>) || {};
+
+      const isUnlimitedResult =
+        typeof raw.is_unlimited === 'boolean' ? raw.is_unlimited : isPaid;
+
       return {
         plan: (raw.plan as PlanType) || currentPlan,
-        is_unlimited: raw.is_unlimited ?? isPaid,
+        is_unlimited: isUnlimitedResult,
         usage: {
           diaria: enrichItem(usage.diaria, 'total'),
           fazer: enrichItem(usage.fazer, 'daily'),
@@ -101,15 +115,21 @@ export async function getUserPlanInfo(
           conquista: enrichItem(usage.conquista, 'monthly'),
           folders: enrichItem(usage.folders, 'total'),
           history: {
-            limit: raw.is_unlimited ? null : 15,
+            limit: isUnlimitedResult ? null : 15,
           },
         },
         features: {
-          pomodoro: raw.features?.pomodoro ?? isPaid,
-          boost: raw.features?.boost ?? isPaid,
-          humor: raw.features?.humor ?? isPaid,
-          unlimited_database: raw.features?.unlimited_database ?? isPaid,
-          ai_assistant: raw.features?.ai_assistant ?? (currentPlan === 'ultra'),
+          pomodoro: typeof rawFeatures.pomodoro === 'boolean' ? rawFeatures.pomodoro : isPaid,
+          boost: typeof rawFeatures.boost === 'boolean' ? rawFeatures.boost : isPaid,
+          humor: typeof rawFeatures.humor === 'boolean' ? rawFeatures.humor : isPaid,
+          unlimited_database:
+            typeof rawFeatures.unlimited_database === 'boolean'
+              ? rawFeatures.unlimited_database
+              : isPaid,
+          ai_assistant:
+            typeof rawFeatures.ai_assistant === 'boolean'
+              ? rawFeatures.ai_assistant
+              : currentPlan === 'ultra',
         },
       };
     }

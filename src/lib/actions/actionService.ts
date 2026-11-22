@@ -1,10 +1,6 @@
 import { supabase } from '@/src/lib/supabase';
 import {
-  Action,
-  ActionInsert,
-  ActionRequirement,
   ActionSchedule,
-  ActionSubtask,
   FrequencyType,
   ImpactDegree,
   ManagementStatus,
@@ -15,7 +11,6 @@ import {
   ActionType,
   FrequencyConfig,
   LinkedRequirement,
-  ReferenceCategory,
   SacrificePriority,
   SimpleSubtask,
 } from '@/src/components/prototypes/types';
@@ -574,13 +569,38 @@ export async function deleteActionWithRelations(
   userId: string,
   actionId: string
 ): Promise<void> {
+  // 1. Verificar se a ação existe e se é ação de sistema protegida
+  const { data: action, error: fetchErr } = await supabase
+    .from('actions')
+    .select('id, is_system, type, title')
+    .eq('id', actionId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (fetchErr) {
+    const fetchErrMsg = fetchErr.message || fetchErr.details || 'Erro ao consultar ação antes da exclusão.';
+    throw new Error(fetchErrMsg);
+  }
+
+  if (!action) {
+    throw new Error('Ação não encontrada ou você não tem permissão para excluí-la.');
+  }
+
+  if (action.is_system) {
+    throw new Error('Ações de sistema (como marcos de nível e conquistas automáticas) não podem ser excluídas.');
+  }
+
+  // 2. Exclusão no Supabase (deleções em cascata cuidam de subtasks, schedules e links)
   const { error } = await supabase
     .from('actions')
     .delete()
     .eq('id', actionId)
     .eq('user_id', userId);
 
-  if (error) throw error;
+  if (error) {
+    const errorDetails = error.message || error.details || error.hint || 'Falha ao excluir ação no banco de dados.';
+    throw new Error(errorDetails);
+  }
 }
 
 // =============================================================================

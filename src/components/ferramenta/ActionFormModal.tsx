@@ -179,8 +179,12 @@ export const ActionFormModal: React.FC<ActionFormModalProps> = ({
 
       onSuccess?.();
     } catch (err: any) {
-      console.error('Falha ao excluir ação no Supabase:', err);
-      alert(`Erro ao excluir ação: ${err?.message || 'Falha ao excluir.'}`);
+      const errorMsg =
+        err?.message ||
+        err?.details ||
+        (typeof err === 'string' ? err : 'Falha ao excluir ação.');
+      console.error('Falha ao excluir ação no Supabase:', errorMsg, err);
+      alert(`Erro ao excluir ação: ${errorMsg}`);
     }
   };
 

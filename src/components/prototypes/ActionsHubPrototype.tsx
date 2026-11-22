@@ -1019,7 +1019,15 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
         const refreshedActions = await fetchActionsWithRelations(userId);
         setActions(refreshedActions);
       } catch (err: any) {
-        console.error('Erro ao deletar ação no Supabase:', err);
+        const errorMsg =
+          err?.message ||
+          err?.details ||
+          (typeof err === 'string' ? err : 'Não foi possível excluir esta ação no banco.');
+        console.error('Erro ao deletar ação no Supabase:', errorMsg, err);
+        showEphemeralToast('Não foi possível excluir', errorMsg);
+        // Rollback da lista para manter a consistência se o banco rejeitou
+        fetchActionsWithRelations(userId).then(setActions).catch(() => {});
+        return;
       }
     }
 
