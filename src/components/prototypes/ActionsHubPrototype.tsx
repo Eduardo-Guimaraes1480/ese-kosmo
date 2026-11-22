@@ -62,6 +62,10 @@ import {
   assignActionToFolder,
 } from '@/src/lib/actions/folderService';
 import { completeAction, undoAction } from '@/src/lib/gamification/actionEngine';
+import { PlanType, UserPlanInfo } from '@/src/types/ese-kosmo';
+import { getUserPlanInfo, applyPlanHistoryLimit } from '@/src/lib/plans/planService';
+import { PlanUpgradeModal } from '@/src/components/ferramenta/PlanUpgradeModal';
+import { PlanUsageBadge } from '@/src/components/ferramenta/PlanUsageBanner';
 import {
   ACTION_TYPE_META,
   ActionDraftTab,
@@ -466,6 +470,12 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
   const [activeNav, setActiveNav] = useState<string>('acoes');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
+  // Plan & Capacity Architecture (Fase 7)
+  const [userPlan, setUserPlan] = useState<PlanType>('free');
+  const [planInfo, setPlanInfo] = useState<UserPlanInfo | null>(null);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState<boolean>(false);
+  const [upgradeModalReason, setUpgradeModalReason] = useState<string | undefined>(undefined);
+
   // Navigation between Hub Home (/acoes), Windows Explorer, and Workspace
   const [hubSection, setHubSection] = useState<HubSection>(initialSection);
   const [selectedFolderId, setSelectedFolderId] = useState<string | 'all' | 'loose'>(initialFolderId);
@@ -569,6 +579,8 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
       setExpandedFolderTree((prev) => ({ ...expanded, ...prev }));
 
       if (profileRes.data) {
+        const resolvedPlan = (profileRes.data.plano as PlanType) || 'free';
+        setUserPlan(resolvedPlan);
         setUserStats({
           nickname: profileRes.data.nickname || 'Kosmonauta',
           vocacao: profileRes.data.vocation || 'Explorador',
@@ -578,6 +590,11 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
           hp: profileRes.data.hp ?? 100,
           streak_days: profileRes.data.offensive_days ?? 0,
         });
+
+        // Carregar uso e limites do plano via RPC transacional
+        getUserPlanInfo(uid, resolvedPlan, actionsData, foldersData.length)
+          .then((info) => setPlanInfo(info))
+          .catch((err) => console.warn('Erro ao carregar plano:', err));
       }
 
       if (notifsRes.data && notifsRes.data.length > 0) {
@@ -677,7 +694,7 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
         ? new Set(getDescendantFolderIds(folders, tableFolderFilter))
         : null;
 
-    return orderedActions.filter((action) => {
+    const baseFiltered = orderedActions.filter((action) => {
       if (typeFilter === 'historico') {
         if (action.status !== 'concluido') return false;
       } else if (typeFilter === 'todas') {
@@ -706,7 +723,12 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
       }
       return true;
     });
-  }, [orderedActions, typeFilter, statusFilter, viewMode, tableFolderFilter, folders, searchQuery]);
+
+    if (typeFilter === 'historico') {
+      return applyPlanHistoryLimit(baseFiltered, userPlan);
+    }
+    return baseFiltered;
+  }, [orderedActions, typeFilter, statusFilter, viewMode, tableFolderFilter, folders, searchQuery, userPlan]);
 
   const missionBossConquistaCards = useMemo(() => {
     return filteredActions.filter(
@@ -958,7 +980,15 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
         }
       } catch (err: any) {
         console.error('Erro ao salvar ação no Supabase:', err);
-        showEphemeralToast('Erro ao salvar no banco', err?.message || 'Tente novamente');
+        const errorMsg = err?.message || 'Tente novamente';
+        if (errorMsg.includes('Plano Free') || errorMsg.includes('LIMIT_REACHED')) {
+          setUpgradeModalReason(errorMsg);
+          setUpgradeModalOpen(true);
+        }
+        showEphemeralToast('Aviso de Plano / Banco', errorMsg);
+        if (userId) {
+          fetchActionsWithRelations(userId).then(setActions).catch(() => {});
+        }
       }
     }
 
@@ -1732,6 +1762,23 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
               <div className="hidden sm:block text-right space-y-0.5">
                 <div className="flex items-center justify-end gap-2 text-xs">
                   <span className="font-bold text-white">{userStats.nickname}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUpgradeModalReason(undefined);
+                      setUpgradeModalOpen(true);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider cursor-pointer transition-all ${
+                      userPlan === 'ultra'
+                        ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                        : userPlan === 'pro'
+                        ? 'bg-[#4850FF]/20 text-[#98A9FF] border border-[#4850FF]/40'
+                        : 'bg-white/10 text-gray-300 border border-white/10 hover:bg-white/20'
+                    }`}
+                    title="Clique para ver capacidades do seu plano"
+                  >
+                    {userPlan.toUpperCase()}
+                  </button>
                   <span className="text-[#98A9FF] font-mono font-bold tabular-nums">
                     NVL {userStats.level}
                   </span>
@@ -2074,11 +2121,21 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
                           >
                             <CatIcon className={`w-6 h-6 ${cat.iconClass}`} />
                           </div>
-                          <span
-                            className={`px-2.5 py-1 rounded-full text-[9px] font-black tracking-widest uppercase border ${cat.badgeClass}`}
-                          >
-                            {cat.badge}
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                            <PlanUsageBadge
+                              usageItem={(planInfo?.usage as any)?.[cat.id]}
+                              plan={userPlan}
+                              onUpgradeClick={() => {
+                                setUpgradeModalReason(`Limite de ${cat.title} no plano Free`);
+                                setUpgradeModalOpen(true);
+                              }}
+                            />
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-[9px] font-black tracking-widest uppercase border ${cat.badgeClass}`}
+                            >
+                              {cat.badge}
+                            </span>
+                          </div>
                         </div>
 
                         <div>
@@ -4379,6 +4436,8 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
           folders={folders}
           tabs={draftTabs}
           activeTabId={activeDraftTabId}
+          currentPlan={userPlan}
+          planUsage={planInfo ?? undefined}
           onChangeTabs={setDraftTabs}
           onChangeActiveTabId={setActiveDraftTabId}
           onClose={() => setFormOpen(false)}
@@ -4404,6 +4463,14 @@ export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
           )}
         </div>
       )}
+
+      {/* Plan Upgrade Modal (Fase 7) */}
+      <PlanUpgradeModal
+        isOpen={upgradeModalOpen}
+        onClose={() => setUpgradeModalOpen(false)}
+        currentPlan={userPlan}
+        reason={upgradeModalReason}
+      />
     </div>
   );
 };

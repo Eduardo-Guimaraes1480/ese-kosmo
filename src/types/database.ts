@@ -559,6 +559,14 @@ export interface Database {
         Args: { p_action_id: string };
         Returns: Json;
       };
+      get_user_plan_usage: {
+        Args: { p_user_id?: string };
+        Returns: Json;
+      };
+      admin_set_user_plan: {
+        Args: { p_user_id: string; p_new_plan: string };
+        Returns: Json;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

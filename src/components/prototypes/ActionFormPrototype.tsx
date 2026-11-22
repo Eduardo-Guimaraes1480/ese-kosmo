@@ -46,6 +46,8 @@ import {
   getDescendantFolderIds,
   getFolderPathLabel,
 } from './folderUtils';
+import { PlanType, UserPlanInfo } from '@/src/types/ese-kosmo';
+import { PlanUpgradeModal } from '@/src/components/ferramenta/PlanUpgradeModal';
 
 export interface ActionFormPrototypeProps {
   isOpen?: boolean;
@@ -56,6 +58,8 @@ export interface ActionFormPrototypeProps {
   folders?: ActionFolder[];
   tabs?: ActionDraftTab[];
   activeTabId?: string;
+  currentPlan?: PlanType;
+  planUsage?: UserPlanInfo;
   onChangeTabs?: React.Dispatch<React.SetStateAction<ActionDraftTab[]>>;
   onChangeActiveTabId?: (tabId: string) => void;
   onClose: () => void;
@@ -187,6 +191,8 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
   folders = [],
   tabs: controlledTabs,
   activeTabId: controlledActiveTabId,
+  currentPlan = 'free',
+  planUsage,
   onChangeTabs,
   onChangeActiveTabId,
   onClose,
@@ -220,6 +226,9 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState<string>('');
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState<boolean>(false);
+  const [upgradeReason, setUpgradeReason] = useState<string | undefined>(undefined);
+  const [upgradeFeature, setUpgradeFeature] = useState<string | undefined>(undefined);
 
   // Enhanced "+ Abrir existente" Quick Explorer Modal state
   const [showQuickSwitchMenu, setShowQuickSwitchMenu] = useState<boolean>(false);
@@ -594,6 +603,21 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
 
     if (!activeTab.title.trim()) {
       setValidationError('Informe o título da ação antes de salvar.');
+      return;
+    }
+
+    // Validação preventiva de limite de plano no frontend
+    const currentTypeUsage = (planUsage?.usage as any)?.[activeTab.type];
+    if (
+      !activeTab.sourceActionId &&
+      currentTypeUsage &&
+      currentTypeUsage.isLimitReached
+    ) {
+      setUpgradeReason(
+        `Você atingiu o limite de ${currentTypeUsage.limit} ações do tipo ${activeTab.type.toUpperCase()} no plano Free.`
+      );
+      setUpgradeFeature(undefined);
+      setIsUpgradeModalOpen(true);
       return;
     }
 
@@ -1057,6 +1081,57 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
               <span>{validationError}</span>
             </div>
+          )}
+
+          {/* Plan Limit Alert Banner */}
+          {planUsage && (planUsage?.usage as any)?.[activeTab.type] && (
+            (() => {
+              const u = (planUsage.usage as any)[activeTab.type];
+              if (!u || u.limit === null) return null;
+              if (u.isLimitReached) {
+                return (
+                  <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-red-500/15 border border-red-500/40 text-red-200 text-xs font-semibold animate-pulse">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                      <span>Limite do plano Free atingido para {activeTab.type.toUpperCase()} ({u.used}/{u.limit}).</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUpgradeReason(`Limite de ${activeTab.type}s atingido no plano Free`);
+                        setUpgradeFeature(undefined);
+                        setIsUpgradeModalOpen(true);
+                      }}
+                      className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-black text-[10px] uppercase tracking-wider transition-colors shrink-0 cursor-pointer"
+                    >
+                      Ver Planos
+                    </button>
+                  </div>
+                );
+              }
+              if (u.isNearLimit) {
+                return (
+                  <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-xs">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-yellow-400 shrink-0" />
+                      <span>Atenção: {u.percentage}% do limite de {activeTab.type.toUpperCase()} utilizado ({u.used}/{u.limit}).</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUpgradeReason(`Você utilizou ${u.percentage}% do limite de ${activeTab.type}`);
+                        setUpgradeFeature(undefined);
+                        setIsUpgradeModalOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 font-bold text-[10px] uppercase tracking-wider transition-colors shrink-0 cursor-pointer"
+                    >
+                      Upgrade Pro
+                    </button>
+                  </div>
+                );
+              }
+              return null;
+            })()
           )}
 
           {/* Main 2-Column Layout */}
@@ -2043,7 +2118,7 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
           {/* Ferramentas para Ação (Em breve) */}
           <div className="space-y-2 pt-2">
             <span className="text-[11px] font-bold tracking-wider uppercase text-gray-400 block">
-              FERRAMENTAS PARA AÇÃO (EM BREVE)
+              FERRAMENTAS PARA AÇÃO (PRO / ULTRA)
             </span>
             <div className="flex flex-wrap gap-3">
               {[
@@ -2053,18 +2128,34 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
                 { icon: BarChart3, label: 'IMPACTO' },
               ].map((tool) => {
                 const ToolIcon = tool.icon;
+                const isToolLocked = currentPlan === 'free';
                 return (
                   <button
                     key={tool.label}
                     type="button"
-                    disabled
-                    title="Disponível em breve no plano Pro"
-                    className="w-20 sm:w-24 h-20 rounded-xl bg-white/[0.03] border border-dashed border-white/15 flex flex-col items-center justify-center gap-1.5 opacity-45 cursor-not-allowed select-none"
+                    onClick={() => {
+                      if (isToolLocked) {
+                        setUpgradeFeature(`${tool.label} (Plano Pro)`);
+                        setUpgradeReason(undefined);
+                        setIsUpgradeModalOpen(true);
+                      }
+                    }}
+                    title={isToolLocked ? 'Exclusivo nos planos Pro e Ultra. Clique para conhecer.' : tool.label}
+                    className={`w-20 sm:w-24 h-20 rounded-xl flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                      isToolLocked
+                        ? 'bg-white/[0.03] border border-dashed border-white/15 opacity-60 hover:opacity-100 hover:border-[#4850FF]/50 hover:bg-[#4850FF]/5'
+                        : 'bg-[#4850FF]/10 border border-[#4850FF]/30 text-white hover:bg-[#4850FF]/20'
+                    }`}
                   >
-                    <ToolIcon className="w-5 h-5 text-gray-400" />
-                    <span className="text-[9px] font-bold tracking-widest text-gray-400 uppercase">
+                    <ToolIcon className={`w-5 h-5 ${isToolLocked ? 'text-gray-400' : 'text-[#98A9FF]'}`} />
+                    <span className="text-[9px] font-bold tracking-widest text-gray-300 uppercase">
                       {tool.label}
                     </span>
+                    {isToolLocked && (
+                      <span className="text-[8px] font-black uppercase text-[#98A9FF] bg-[#4850FF]/20 px-1.5 py-0.5 rounded">
+                        PRO
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -2414,6 +2505,14 @@ export const ActionFormPrototype: React.FC<ActionFormPrototypeProps> = ({
         </div>
       </div>
     )}
+
+      <PlanUpgradeModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        currentPlan={currentPlan}
+        reason={upgradeReason}
+        blockedFeature={upgradeFeature}
+      />
     </>
   );
 };

@@ -20,6 +20,7 @@ import {
   SimpleSubtask,
 } from '@/src/components/prototypes/types';
 import { syncActionFolders } from '@/src/lib/actions/folderService';
+import { parsePlanErrorMessage } from '@/src/lib/plans/planService';
 // =============================================================================
 // MAPEAMENTO E CONVERSORES DE DOMÍNIO
 // =============================================================================
@@ -326,7 +327,10 @@ export async function saveActionWithRelations(
       .select('id')
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      const planErr = parsePlanErrorMessage(insertError);
+      throw new Error(planErr.message);
+    }
     targetActionId = insertData.id;
   }
 

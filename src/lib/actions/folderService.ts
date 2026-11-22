@@ -1,5 +1,6 @@
 import { supabase } from '@/src/lib/supabase';
 import { ActionFolder } from '@/src/components/prototypes/types';
+import { parsePlanErrorMessage } from '@/src/lib/plans/planService';
 
 // =============================================================================
 // TIPOS INTERNOS
@@ -129,7 +130,10 @@ export async function createFolder(
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    const planErr = parsePlanErrorMessage(error);
+    throw new Error(planErr.message);
+  }
   return toActionFolder(data as DbFolder);
 }
 
@@ -158,7 +162,10 @@ export async function updateFolder(
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    const planErr = parsePlanErrorMessage(error);
+    throw new Error(planErr.message);
+  }
   return toActionFolder(data as DbFolder);
 }
 
@@ -178,7 +185,10 @@ export async function moveFolder(
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    const planErr = parsePlanErrorMessage(error);
+    throw new Error(planErr.message);
+  }
   return toActionFolder(data as DbFolder);
 }
 

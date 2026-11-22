@@ -17,6 +17,8 @@ import {
   saveActionWithRelations,
 } from '@/src/lib/actions/actionService';
 import { fetchFoldersForUser } from '@/src/lib/actions/folderService';
+import { PlanType, UserPlanInfo } from '@/src/types/ese-kosmo';
+import { getUserPlanInfo } from '@/src/lib/plans/planService';
 
 export interface ActionFormModalProps {
   isOpen: boolean;
@@ -40,6 +42,8 @@ export const ActionFormModal: React.FC<ActionFormModalProps> = ({
   const [folders, setFolders] = useState<ActionFolder[]>([]);
   const [tabs, setTabs] = useState<ActionDraftTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>('');
+  const [userPlan, setUserPlan] = useState<PlanType>('free');
+  const [planUsage, setPlanUsage] = useState<UserPlanInfo | undefined>(undefined);
 
   // 1. Carregar sessão do usuário
   useEffect(() => {
@@ -52,6 +56,16 @@ export const ActionFormModal: React.FC<ActionFormModalProps> = ({
         fetchFoldersForUser()
           .then((f) => setFolders(f))
           .catch((err) => console.error('Erro ao carregar pastas:', err));
+        supabase
+          .from('profiles')
+          .select('plano')
+          .eq('id', session.user.id)
+          .single()
+          .then(({ data }) => {
+            const plan = (data?.plano as PlanType) || 'free';
+            setUserPlan(plan);
+            getUserPlanInfo(session.user.id, plan).then(setPlanUsage).catch(() => {});
+          });
       }
     });
   }, []);
@@ -182,6 +196,8 @@ export const ActionFormModal: React.FC<ActionFormModalProps> = ({
       folders={folders}
       tabs={tabs}
       activeTabId={activeTabId}
+      currentPlan={userPlan}
+      planUsage={planUsage}
       onChangeTabs={setTabs}
       onChangeActiveTabId={setActiveTabId}
       onClose={onClose}

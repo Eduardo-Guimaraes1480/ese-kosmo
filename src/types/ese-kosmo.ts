@@ -237,3 +237,43 @@ export function getEffectiveManagementStatus(
   }
   return action.management_status || 'nao_definido';
 }
+
+// ── Tipos de Planos e Limites (Fase 7) ────────────────────────────────────────
+
+export type PlanPeriod = 'daily' | 'monthly' | 'total';
+
+export interface PlanTypeUsageItem {
+  used: number;
+  limit: number | null; // null se ilimitado (Pro/Ultra)
+  period: PlanPeriod;
+  percentage?: number;
+  isNearLimit?: boolean;   // >= 80%
+  isLimitReached?: boolean; // >= 100%
+}
+
+export interface PlanFeatures {
+  pomodoro: boolean;
+  boost: boolean;
+  humor: boolean;
+  unlimited_database: boolean;
+  ai_assistant: boolean;
+}
+
+export interface UserPlanInfo {
+  plan: PlanType;
+  is_unlimited: boolean;
+  usage: {
+    diaria: PlanTypeUsageItem;
+    fazer: PlanTypeUsageItem;
+    meta: PlanTypeUsageItem;
+    boss: PlanTypeUsageItem;
+    problema: PlanTypeUsageItem;
+    conquista: PlanTypeUsageItem;
+    folders: PlanTypeUsageItem;
+    history: {
+      limit: number | null; // 15 no Free, null no Pro/Ultra
+    };
+  };
+  features: PlanFeatures;
+}
+
