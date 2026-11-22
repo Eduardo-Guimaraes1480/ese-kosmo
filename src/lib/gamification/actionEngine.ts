@@ -1,5 +1,4 @@
 import { supabase } from '@/src/lib/supabase';
-import { calculateLevelInfo } from '@/src/lib/calculateLevelInfo';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -10,218 +9,165 @@ export interface ActionEngineResult {
   eseGained?: number;
   leveledUp?: boolean;
   newLevel?: number;
+  newXp?: number;
+  newEse?: number;
 }
 
-// showPopup is a client-side callback; pass a no-op on the server if unneeded.
+export interface PenaltyResult {
+  ok: boolean;
+  error?: string;
+  newHp?: number;
+  newEse?: number;
+  hpZeroed?: boolean;
+}
+
 type PopupFn = (title: string, message: string, type: string) => void;
 
 // ─── completeAction ───────────────────────────────────────────────────────────
+// Delegates to the atomic PostgreSQL stored procedure `complete_action`.
+// All XP, E$E, level, pillar, radar and streak logic runs server-side in a
+// single transaction with FOR UPDATE locks — eliminates race conditions.
 
 export async function completeAction(
-  action: any,
-  userId: string,
+  action: { id: string; status?: string; type?: string },
+  _userId: string,  // kept for API compatibility; RPC uses auth.uid() internally
   showPopup: PopupFn = () => {}
 ): Promise<ActionEngineResult> {
   if (action.status === 'concluido') return { ok: false, error: 'already_done' };
 
-  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase.rpc('complete_action', {
+    p_action_id: action.id,
+  });
 
-  // A. Update action status
-  const { error: actErr } = await supabase
-    .from('actions')
-    .update({ status: 'concluido', completed_at: nowIso })
-    .eq('id', action.id);
-  if (actErr) return { ok: false, error: actErr.message };
-
-  let notificationsTriggered = false;
-  const xpReward = Number(action.xp_reward || 0);
-  const eseReward = Number(action.ese_reward || 0);
-
-  // B. Fetch latest profile to avoid stale XP
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('xp, ese_balance, level, offensive_days, last_active_date')
-    .eq('id', userId)
-    .single();
-
-  const oldLevel = calculateLevelInfo(profile?.xp || 0).level;
-  const newXp = (profile?.xp || 0) + xpReward;
-  const newEse = (profile?.ese_balance || 0) + eseReward;
-  const levelInfo = calculateLevelInfo(newXp);
-
-  await supabase
-    .from('profiles')
-    .update({ xp: newXp, ese_balance: newEse, level: levelInfo.level })
-    .eq('id', userId);
-
-  // 🎉 Level Up
-  if (levelInfo.level > oldLevel) {
-    const t = '🎉 LEVEL UP!';
-    const m = `Sua Persona atingiu o Nível ${levelInfo.level}! Continue evoluindo.`;
-    await supabase.from('notifications').insert({ user_id: userId, title: t, message: m, type: 'level_up', read: false });
-    showPopup(t, m, 'level_up');
-    notificationsTriggered = true;
+  if (error) {
+    console.error('[completeAction] RPC error:', error);
+    return { ok: false, error: error.message };
   }
 
-  // C. Pillar impact
-  const pilarImpact = Number(action.pilar_impact || 0);
-  const pilarName = action.pillar;
-  if (pilarName && pilarImpact > 0) {
-    const { data: pillarData } = await supabase
-      .from('pillars')
-      .select('*')
-      .eq('user_id', userId)
-      .ilike('name', pilarName)
-      .single();
+  const result = data as {
+    ok: boolean;
+    error?: string;
+    xpGained?: number;
+    eseGained?: number;
+    leveledUp?: boolean;
+    newLevel?: number;
+    newXp?: number;
+    newEse?: number;
+  };
 
-    if (pillarData) {
-      let finalProgress = Number(pillarData.progress || 0) + pilarImpact;
-      let finalLevel = Number(pillarData.level || 1);
-      if (finalProgress >= 100) {
-        finalLevel += Math.floor(finalProgress / 100);
-        finalProgress = finalProgress % 100;
-      }
-      await supabase.from('pillars').update({ progress: finalProgress, level: finalLevel }).eq('id', pillarData.id);
-
-      if (finalLevel > Number(pillarData.level || 1)) {
-        const t = '📈 PILAR EVOLUIU!';
-        const m = `O pilar "${pilarName}" atingiu o Nível ${finalLevel}!`;
-        await supabase.from('notifications').insert({ user_id: userId, title: t, message: m, type: 'pilar_up', read: false });
-        showPopup(t, m, 'pilar_up');
-        notificationsTriggered = true;
-      }
-    }
+  if (!result?.ok) {
+    const errCode = result?.error ?? 'unknown_error';
+    console.warn('[completeAction] Server rejected:', errCode);
+    return { ok: false, error: errCode };
   }
 
-  // D. Sacrifice radar impact
-  const radarImpact = Number(action.radar_impact || 0);
-  if (action.sacrifice_priority && radarImpact > 0) {
-    const { data: radarPilar } = await supabase
-      .from('grafico_sacrificios')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('prioridade', action.sacrifice_priority)
-      .single();
-
-    if (radarPilar) {
-      await supabase
-        .from('grafico_sacrificios')
-        .update({ valor: Math.min(100, Number(radarPilar.valor || 0) + radarImpact) })
-        .eq('id', radarPilar.id);
-    } else {
-      await supabase
-        .from('grafico_sacrificios')
-        .insert({ user_id: userId, prioridade: action.sacrifice_priority, valor: Math.min(100, 50 + radarImpact) });
-    }
+  // Trigger popup feedback for level-up (server already created the notification)
+  if (result.leveledUp && result.newLevel) {
+    showPopup(
+      '🎉 LEVEL UP!',
+      `Sua Persona atingiu o Nível ${result.newLevel}! Continue evoluindo.`,
+      'level_up'
+    );
   }
-
-  // E. Offensive streak (diárias only)
-  if (action.type === 'diaria') {
-    const todayStr = new Date().toLocaleDateString('en-CA');
-    if (profile?.last_active_date !== todayStr) {
-      const newOfensiva = (profile?.offensive_days || 0) + 1;
-      await supabase
-        .from('profiles')
-        .update({ offensive_days: newOfensiva, last_active_date: todayStr })
-        .eq('id', userId);
-
-      if ([1, 2, 3].includes(newOfensiva) || newOfensiva % 7 === 0) {
-        const t = '🔥 MINHA OFENSIVA!';
-        const m = `Você atingiu ${newOfensiva} dia${newOfensiva > 1 ? 's' : ''} seguido${newOfensiva > 1 ? 's' : ''}!`;
-        await supabase.from('notifications').insert({ user_id: userId, title: t, message: m, type: 'ofensiva', read: false });
-        showPopup(t, m, 'ofensiva');
-        notificationsTriggered = true;
-      }
-    }
-  }
-
-  void notificationsTriggered; // used by caller to decide if they want to refetch notifs
 
   return {
     ok: true,
-    xpGained: xpReward,
-    eseGained: eseReward,
-    leveledUp: levelInfo.level > oldLevel,
-    newLevel: levelInfo.level,
+    xpGained: result.xpGained ?? 0,
+    eseGained: result.eseGained ?? 0,
+    leveledUp: result.leveledUp ?? false,
+    newLevel: result.newLevel,
+    newXp: result.newXp,
+    newEse: result.newEse,
   };
 }
 
 // ─── undoAction ───────────────────────────────────────────────────────────────
+// Delegates to the atomic PostgreSQL stored procedure `reopen_action`.
+// XP, E$E, level, pillar and radar are reverted server-side atomically.
+// Streak (ofensiva) is intentionally NOT reverted by design.
 
 export async function undoAction(
-  action: any,
-  userId: string
+  action: { id: string; status?: string },
+  _userId: string   // kept for API compatibility; RPC uses auth.uid() internally
 ): Promise<ActionEngineResult> {
   if (action.status !== 'concluido') return { ok: false, error: 'not_completed' };
 
-  const { error: actErr } = await supabase
-    .from('actions')
-    .update({ status: 'pendente', completed_at: null })
-    .eq('id', action.id);
-  if (actErr) return { ok: false, error: actErr.message };
+  const { data, error } = await supabase.rpc('reopen_action', {
+    p_action_id: action.id,
+  });
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('xp, ese_balance')
-    .eq('id', userId)
-    .single();
-
-  const xpReward = Number(action.xp_reward || 0);
-  const eseReward = Number(action.ese_reward || 0);
-  const newXp = Math.max(0, (profile?.xp || 0) - xpReward);
-  const newEse = Math.max(0, (profile?.ese_balance || 0) - eseReward);
-  const levelInfo = calculateLevelInfo(newXp);
-
-  await supabase
-    .from('profiles')
-    .update({ xp: newXp, ese_balance: newEse, level: levelInfo.level })
-    .eq('id', userId);
-
-  // Revert pillar
-  const pilarImpact = Number(action.pilar_impact || 0);
-  const pilarName = action.pillar;
-  if (pilarName && pilarImpact > 0) {
-    const { data: pillarData } = await supabase
-      .from('pillars')
-      .select('*')
-      .eq('user_id', userId)
-      .ilike('name', pilarName)
-      .single();
-
-    if (pillarData) {
-      let finalProgress = Number(pillarData.progress || 0) - pilarImpact;
-      let finalLevel = Number(pillarData.level || 1);
-      if (finalProgress < 0) {
-        if (finalLevel > 1) {
-          const levelsLost = Math.ceil(Math.abs(finalProgress) / 100);
-          finalLevel = Math.max(1, finalLevel - levelsLost);
-          finalProgress = 100 - (Math.abs(finalProgress) % 100);
-          if (finalProgress === 100) finalProgress = 0;
-        } else {
-          finalProgress = 0;
-        }
-      }
-      await supabase.from('pillars').update({ progress: finalProgress, level: finalLevel }).eq('id', pillarData.id);
-    }
+  if (error) {
+    console.error('[undoAction] RPC error:', error);
+    return { ok: false, error: error.message };
   }
 
-  // Revert radar
-  const radarImpact = Number(action.radar_impact || 0);
-  if (action.sacrifice_priority && radarImpact > 0) {
-    const { data: radarPilar } = await supabase
-      .from('grafico_sacrificios')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('prioridade', action.sacrifice_priority)
-      .single();
+  const result = data as {
+    ok: boolean;
+    error?: string;
+    newXp?: number;
+    newEse?: number;
+    newLevel?: number;
+  };
 
-    if (radarPilar) {
-      await supabase
-        .from('grafico_sacrificios')
-        .update({ valor: Math.max(0, Number(radarPilar.valor || 0) - radarImpact) })
-        .eq('id', radarPilar.id);
-    }
+  if (!result?.ok) {
+    console.warn('[undoAction] Server rejected:', result?.error);
+    return { ok: false, error: result?.error ?? 'unknown_error' };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    newXp: result.newXp,
+    newEse: result.newEse,
+    newLevel: result.newLevel,
+  };
+}
+
+// ─── applyPenalty ─────────────────────────────────────────────────────────────
+// Delegates to the atomic PostgreSQL stored procedure `apply_penalty`.
+// Idempotent — safe to call multiple times (server rejects if already applied).
+
+export async function applyPenalty(
+  actionId: string,
+  showPopup: PopupFn = () => {}
+): Promise<PenaltyResult> {
+  const { data, error } = await supabase.rpc('apply_penalty', {
+    p_action_id: actionId,
+  });
+
+  if (error) {
+    console.error('[applyPenalty] RPC error:', error);
+    return { ok: false, error: error.message };
+  }
+
+  const result = data as {
+    ok: boolean;
+    error?: string;
+    newHp?: number;
+    newEse?: number;
+    hpZeroed?: boolean;
+  };
+
+  if (!result?.ok) {
+    // Expected non-error states (already applied, action completed, etc.)
+    const knownSilent = ['penalty_already_applied', 'action_already_completed', 'no_penalty_active'];
+    if (!knownSilent.includes(result?.error ?? '')) {
+      console.warn('[applyPenalty] Server rejected:', result?.error);
+    }
+    return { ok: false, error: result?.error ?? 'unknown_error' };
+  }
+
+  if (result.hpZeroed) {
+    showPopup(
+      '☠️ HP ZERADO!',
+      'Todos os seus pilares perderam 1 nível, o Gráfico de Sacrifícios foi zerado e você perdeu 100 E$E!',
+      'hp_zero'
+    );
+  }
+
+  return {
+    ok: true,
+    newHp: result.newHp,
+    newEse: result.newEse,
+    hpZeroed: result.hpZeroed ?? false,
+  };
 }

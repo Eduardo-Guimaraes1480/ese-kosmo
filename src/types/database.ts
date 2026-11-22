@@ -543,6 +543,22 @@ export interface Database {
         Args: Record<string, never>;
         Returns: unknown;
       };
+      calculate_level_from_xp: {
+        Args: { p_xp: number };
+        Returns: number;
+      };
+      complete_action: {
+        Args: { p_action_id: string };
+        Returns: Json;
+      };
+      reopen_action: {
+        Args: { p_action_id: string };
+        Returns: Json;
+      };
+      apply_penalty: {
+        Args: { p_action_id: string };
+        Returns: Json;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

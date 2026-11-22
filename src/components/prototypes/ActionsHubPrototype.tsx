@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Flame,
   Home,
@@ -43,7 +44,24 @@ import {
   ListOrdered,
   Pencil,
   CalendarDays,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
+import { supabase } from '@/src/lib/supabase';
+import {
+  fetchActionsWithRelations,
+  saveActionWithRelations,
+  deleteActionWithRelations,
+} from '@/src/lib/actions/actionService';
+import {
+  fetchFoldersForUser,
+  createFolder,
+  updateFolder,
+  deleteFolder,
+  syncActionFolders,
+  assignActionToFolder,
+} from '@/src/lib/actions/folderService';
+import { completeAction, undoAction } from '@/src/lib/gamification/actionEngine';
 import {
   ACTION_TYPE_META,
   ActionDraftTab,
@@ -423,21 +441,35 @@ const MiniMonthCalendar: React.FC<MiniMonthCalendarProps> = ({
   );
 };
 
-export const ActionsHubPrototype: React.FC = () => {
-  const [actions, setActions] = useState<ActionItem[]>(INITIAL_ACTIONS);
-  const [folders, setFolders] = useState<ActionFolder[]>(INITIAL_FOLDERS);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+export interface ActionsHubPrototypeProps {
+  initialSection?: HubSection;
+  initialViewMode?: ViewMode;
+  initialTypeFilter?: HubFilterType;
+  initialFolderId?: string | 'all' | 'loose';
+}
+
+export const ActionsHubPrototype: React.FC<ActionsHubPrototypeProps> = ({
+  initialSection = 'hub',
+  initialViewMode = 'tabela',
+  initialTypeFilter = 'todas',
+  initialFolderId = 'all',
+}) => {
+  const router = useRouter();
+  const [userId, setUserId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [actions, setActions] = useState<ActionItem[]>([]);
+  const [folders, setFolders] = useState<ActionFolder[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [userStats, setUserStats] = useState<UserPersonaStats>(INITIAL_USER_STATS);
   const [activeNav, setActiveNav] = useState<string>('acoes');
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
 
   // Navigation between Hub Home (/acoes), Windows Explorer, and Workspace
-  const [hubSection, setHubSection] = useState<HubSection>('hub');
-  const [selectedFolderId, setSelectedFolderId] = useState<string | 'all' | 'loose'>('all');
-  const [expandedFolderTree, setExpandedFolderTree] = useState<Record<string, boolean>>({
-    'folder-kosmo': true,
-    'folder-kosmo-frontend': true,
-  });
+  const [hubSection, setHubSection] = useState<HubSection>(initialSection);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | 'all' | 'loose'>(initialFolderId);
+  const [expandedFolderTree, setExpandedFolderTree] = useState<Record<string, boolean>>({});
   const [explorerEditMode, setExplorerEditMode] = useState<boolean>(false);
   const [explorerDeleteMode, setExplorerDeleteMode] = useState<boolean>(false);
   const [showNewFolderInput, setShowNewFolderInput] = useState<boolean>(false);
@@ -451,11 +483,11 @@ export const ActionsHubPrototype: React.FC = () => {
   const [dragOverActionId, setDragOverActionId] = useState<string | null>(null);
 
   // Filters & View Modes inside Workspace
-  const [typeFilter, setTypeFilter] = useState<HubFilterType>('todas');
+  const [typeFilter, setTypeFilter] = useState<HubFilterType>(initialTypeFilter);
   const [statusFilter, setStatusFilter] = useState<'todos' | ManagementStatus>('todos');
   const [tableFolderFilter, setTableFolderFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [viewMode, setViewMode] = useState<ViewMode>('tabela');
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
   const [chronologySubMode, setChronologySubMode] = useState<ChronologySubMode>('horario');
 
   // Table & Chronology Manual Expanded Subtasks
@@ -508,6 +540,79 @@ export const ActionsHubPrototype: React.FC = () => {
     () => draftTabs.filter((t) => t.isDirty).length,
     [draftTabs]
   );
+
+  // Carregamento de dados reais do Supabase
+  const loadRealData = useCallback(async (uid: string) => {
+    try {
+      setIsLoading(true);
+      setLoadError(null);
+      const [actionsData, foldersData, profileRes, notifsRes] = await Promise.all([
+        fetchActionsWithRelations(uid),
+        fetchFoldersForUser().catch(() => []),
+        supabase.from('profiles').select('*').eq('id', uid).maybeSingle(),
+        supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_id', uid)
+          .order('created_at', { ascending: false })
+          .limit(20),
+      ]);
+
+      setActions(actionsData);
+      setFolders(foldersData);
+
+      // Expandir pastas raízes por padrão
+      const expanded: Record<string, boolean> = {};
+      foldersData.forEach((f) => {
+        if (!f.parent_folder_id) expanded[f.id] = true;
+      });
+      setExpandedFolderTree((prev) => ({ ...expanded, ...prev }));
+
+      if (profileRes.data) {
+        setUserStats({
+          nickname: profileRes.data.nickname || 'Kosmonauta',
+          vocacao: profileRes.data.vocation || 'Explorador',
+          level: profileRes.data.level ?? 1,
+          xp_total: profileRes.data.xp ?? 0,
+          ese_total: profileRes.data.ese_balance ?? 0,
+          hp: profileRes.data.hp ?? 100,
+          streak_days: profileRes.data.offensive_days ?? 0,
+        });
+      }
+
+      if (notifsRes.data && notifsRes.data.length > 0) {
+        setNotifications(
+          notifsRes.data.map((n) => ({
+            id: n.id,
+            title: n.title,
+            subtitle: n.message,
+            timestamp: new Date(n.created_at).toLocaleTimeString('pt-BR', {
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+            read: n.read,
+            category: (n.type as any) || 'milestone',
+          }))
+        );
+      }
+    } catch (err: any) {
+      console.error('Erro ao carregar dados do Supabase:', err);
+      setLoadError('Erro ao carregar dados do Supabase. Verifique sua conexão.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user?.id) {
+        setUserId(session.user.id);
+        loadRealData(session.user.id);
+      } else {
+        setIsLoading(false);
+      }
+    });
+  }, [loadRealData]);
 
   // Ephemeral Toast ONLY (does NOT clutter Header Bell — Item 5)
   const showEphemeralToast = (title: string, subtitle?: string) => {
@@ -645,7 +750,7 @@ export const ActionsHubPrototype: React.FC = () => {
   }, [folders, selectedFolderId]);
 
   // Toggle action completion
-  const handleToggleActionComplete = (actionId: string) => {
+  const handleToggleActionComplete = async (actionId: string) => {
     const target = actions.find((a) => a.id === actionId);
     if (!target) return;
     const nextDone = target.status !== 'concluido';
@@ -688,10 +793,37 @@ export const ActionsHubPrototype: React.FC = () => {
     } else {
       showEphemeralToast('Ação reaberta', target.title);
     }
+
+    if (userId) {
+      try {
+        if (nextDone) {
+          await completeAction(target, userId);
+        } else {
+          await undoAction(target, userId);
+        }
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('xp, ese_balance, level, hp, offensive_days')
+          .eq('id', userId)
+          .single();
+        if (profile) {
+          setUserStats((prev) => ({
+            ...prev,
+            xp_total: profile.xp ?? prev.xp_total,
+            ese_total: profile.ese_balance ?? prev.ese_total,
+            level: profile.level ?? prev.level,
+            hp: profile.hp ?? prev.hp,
+            streak_days: profile.offensive_days ?? prev.streak_days,
+          }));
+        }
+      } catch (err) {
+        console.error('Erro ao alternar status da ação no Supabase:', err);
+      }
+    }
   };
 
   // Toggle requirement inside Mission/BOSS/Conquista or Fazer
-  const handleToggleRequirement = (actionId: string, requirementId: string) => {
+  const handleToggleRequirement = async (actionId: string, requirementId: string) => {
     let deltaXp = 0;
     let deltaEse = 0;
     let reqTitle = '';
@@ -726,6 +858,31 @@ export const ActionsHubPrototype: React.FC = () => {
       }));
       if (markedDone) {
         showEphemeralToast(`+${deltaXp} XP · +${deltaEse} E$E`, `Subtarefa: ${reqTitle}`);
+      }
+    }
+
+    if (userId) {
+      try {
+        const targetAct = actions.find((a) => a.id === actionId);
+        const targetReq = targetAct?.requirements?.find((r) => r.id === requirementId);
+        if (targetReq?.linkedActionId) {
+          await supabase
+            .from('actions')
+            .update({
+              status: markedDone ? 'concluido' : 'pendente',
+              completed_at: markedDone ? new Date().toISOString() : null,
+            })
+            .eq('id', targetReq.linkedActionId)
+            .eq('user_id', userId);
+        } else {
+          await supabase
+            .from('action_subtasks')
+            .update({ is_completed: markedDone })
+            .eq('id', requirementId)
+            .eq('user_id', userId);
+        }
+      } catch (err) {
+        console.error('Erro ao sincronizar requisito no Supabase:', err);
       }
     }
   };
@@ -766,7 +923,11 @@ export const ActionsHubPrototype: React.FC = () => {
     setFormOpen(true);
   };
 
-  const handleSaveAction = (saved: ActionItem, inlineFazers?: ActionItem[]) => {
+  const handleSaveAction = async (
+    saved: ActionItem,
+    inlineFazers?: ActionItem[],
+    savedTabId?: string
+  ) => {
     const existedBefore = actions.some((a) => a.id === saved.id);
     setActions((prev) => {
       const updated = existedBefore
@@ -778,13 +939,36 @@ export const ActionsHubPrototype: React.FC = () => {
       return updated;
     });
     setFormOpen(false);
+
+    if (userId) {
+      try {
+        const activeTab =
+          draftTabs.find((t) => t.tabId === savedTabId) ||
+          draftTabs.find((t) => t.sourceActionId === saved.id) ||
+          draftTabs[0];
+
+        if (activeTab) {
+          await saveActionWithRelations(
+            userId,
+            activeTab,
+            activeTab.sourceActionId || (existedBefore ? saved.id : null)
+          );
+          const refreshedActions = await fetchActionsWithRelations(userId);
+          setActions(refreshedActions);
+        }
+      } catch (err: any) {
+        console.error('Erro ao salvar ação no Supabase:', err);
+        showEphemeralToast('Erro ao salvar no banco', err?.message || 'Tente novamente');
+      }
+    }
+
     showEphemeralToast(
       existedBefore ? 'Ação atualizada' : 'Nova ação criada',
       `${saved.title} (${ACTION_TYPE_META[saved.type].label})`
     );
   };
 
-  const handleDeleteAction = (actionId: string) => {
+  const handleDeleteAction = async (actionId: string) => {
     const removed = actions.find((a) => a.id === actionId);
     setActions((prev) => prev.filter((a) => a.id !== actionId));
     setDraftTabs((prev) => {
@@ -798,6 +982,17 @@ export const ActionsHubPrototype: React.FC = () => {
       return remaining;
     });
     setFormOpen(false);
+
+    if (userId) {
+      try {
+        await deleteActionWithRelations(userId, actionId);
+        const refreshedActions = await fetchActionsWithRelations(userId);
+        setActions(refreshedActions);
+      } catch (err: any) {
+        console.error('Erro ao deletar ação no Supabase:', err);
+      }
+    }
+
     showEphemeralToast('Ação removida', removed?.title ?? 'Registro removido.');
   };
 
@@ -810,11 +1005,18 @@ export const ActionsHubPrototype: React.FC = () => {
   };
 
   // Multi-Folder Assignment (Item 6)
-  const handleSetActionFolders = (actionId: string, nextFolderIds: string[]) => {
+  const handleSetActionFolders = async (actionId: string, nextFolderIds: string[]) => {
     const target = actions.find((a) => a.id === actionId);
     setActions((prev) =>
       prev.map((a) => (a.id === actionId ? { ...a, folderIds: nextFolderIds } : a))
     );
+    if (userId) {
+      try {
+        await syncActionFolders(userId, actionId, nextFolderIds);
+      } catch (err) {
+        console.error('Erro ao sincronizar pastas da ação no Supabase:', err);
+      }
+    }
     if (target) {
       showEphemeralToast(
         nextFolderIds.length === 0
@@ -825,11 +1027,11 @@ export const ActionsHubPrototype: React.FC = () => {
     }
   };
 
-  const handleAddActionToFolderDrop = (actionId: string, folderId: string | null) => {
+  const handleAddActionToFolderDrop = async (actionId: string, folderId: string | null) => {
     const target = actions.find((a) => a.id === actionId);
     if (!target) return;
     if (folderId === null) {
-      handleSetActionFolders(actionId, []);
+      await handleSetActionFolders(actionId, []);
       return;
     }
     const nextIds = target.folderIds.includes(folderId)
@@ -838,6 +1040,13 @@ export const ActionsHubPrototype: React.FC = () => {
     setActions((prev) =>
       prev.map((a) => (a.id === actionId ? { ...a, folderIds: nextIds } : a))
     );
+    if (userId) {
+      try {
+        await assignActionToFolder(userId, actionId, folderId);
+      } catch (err) {
+        console.error('Erro ao vincular pasta no Supabase:', err);
+      }
+    }
     const folder = folders.find((f) => f.id === folderId);
     showEphemeralToast(
       `Adicionada em "${folder?.name ?? 'Pasta'}"`,
@@ -846,11 +1055,37 @@ export const ActionsHubPrototype: React.FC = () => {
   };
 
   // Folder / Subfolder CRUD (Item 2)
-  const handleCreateFolder = (overrideParentId?: string | null) => {
+  const handleCreateFolder = async (overrideParentId?: string | null) => {
     const clean = newFolderName.trim();
     if (!clean) return;
     const parentIdToUse =
       overrideParentId !== undefined ? overrideParentId : newFolderParentId;
+
+    if (userId) {
+      try {
+        const created = await createFolder(userId, {
+          name: clean,
+          color: newFolderColor,
+          parent_folder_id: parentIdToUse,
+        });
+        setFolders((prev) => [...prev, created]);
+        if (parentIdToUse) {
+          setExpandedFolderTree((prev) => ({ ...prev, [parentIdToUse]: true }));
+        }
+        setSelectedFolderId(created.id);
+        setNewFolderName('');
+        setShowNewFolderInput(false);
+        pushImportantNotification(
+          parentIdToUse ? 'Subpasta criada' : 'Pasta criada',
+          getFolderPathLabel([...folders, created], created.id),
+          'folder'
+        );
+        return;
+      } catch (err) {
+        console.error('Erro ao criar pasta no Supabase:', err);
+      }
+    }
+
     const created: ActionFolder = {
       id: `folder-${Date.now()}`,
       user_id: 'mock-user',
@@ -875,17 +1110,35 @@ export const ActionsHubPrototype: React.FC = () => {
     );
   };
 
-  const handleRenameFolder = (folderId: string) => {
+  const handleRenameFolder = async (folderId: string) => {
     const clean = renameFolderValue.trim();
     if (!clean) return;
+
+    if (userId) {
+      try {
+        await updateFolder(folderId, { name: clean });
+      } catch (err) {
+        console.error('Erro ao renomear pasta no Supabase:', err);
+      }
+    }
+
     setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, name: clean } : f)));
     setRenamingFolderId(null);
     pushImportantNotification('Pasta renomeada', clean, 'folder');
   };
 
-  const handleDeleteFolder = (folderId: string) => {
+  const handleDeleteFolder = async (folderId: string) => {
     const target = folders.find((f) => f.id === folderId);
     const toRemoveIds = new Set(getDescendantFolderIds(folders, folderId));
+
+    if (userId) {
+      try {
+        await deleteFolder(folderId);
+      } catch (err) {
+        console.error('Erro ao excluir pasta no Supabase:', err);
+      }
+    }
+
     setFolders((prev) => prev.filter((f) => !toRemoveIds.has(f.id)));
     setActions((prev) =>
       prev.map((a) => ({
@@ -904,8 +1157,9 @@ export const ActionsHubPrototype: React.FC = () => {
   };
 
   // Drag-and-Drop Reorder (Table, Explorer grid cards, Manual Chronology)
-  const handleReorderActions = (dragId: string, dropTargetId: string) => {
+  const handleReorderActions = async (dragId: string, dropTargetId: string) => {
     if (dragId === dropTargetId) return;
+    let reindexed: ActionItem[] = [];
     setActions((prev) => {
       const sorted = [...prev].sort((a, b) => a.order_index - b.order_index);
       const fromIndex = sorted.findIndex((a) => a.id === dragId);
@@ -913,19 +1167,50 @@ export const ActionsHubPrototype: React.FC = () => {
       if (fromIndex === -1 || toIndex === -1) return prev;
       const [moved] = sorted.splice(fromIndex, 1);
       sorted.splice(toIndex, 0, moved);
-      return sorted.map((item, idx) => ({ ...item, order_index: idx + 1 }));
+      reindexed = sorted.map((item, idx) => ({ ...item, order_index: idx + 1 }));
+      return reindexed;
     });
-    showEphemeralToast('Ordem atualizada', 'Sequência manual salva em memória.');
+
+    if (userId && reindexed.length > 0) {
+      try {
+        await Promise.all(
+          reindexed.map((item) =>
+            supabase
+              .from('actions')
+              .update({ order_index: item.order_index })
+              .eq('id', item.id)
+              .eq('user_id', userId)
+          )
+        );
+      } catch (err) {
+        console.error('Erro ao salvar reordenação no Supabase:', err);
+      }
+    }
+    showEphemeralToast('Ordem atualizada', 'Sequência manual salva com sucesso.');
   };
 
   // Quick inline schedule in Cronologia por Horário (Item 8)
-  const handleAssignActionTime = (actionId: string, newTime: string) => {
+  const handleAssignActionTime = async (actionId: string, newTime: string) => {
     if (!newTime.trim()) return;
     const act = actions.find((a) => a.id === actionId);
     setActions((prev) =>
       prev.map((a) => (a.id === actionId ? { ...a, due_time: newTime } : a))
     );
     setSchedulingActionId(null);
+
+    if (userId && act) {
+      try {
+        const fullDueIso = `${chronoSelectedIso}T${newTime}:00`;
+        await supabase
+          .from('actions')
+          .update({ due_date: fullDueIso })
+          .eq('id', actionId)
+          .eq('user_id', userId);
+      } catch (err) {
+        console.error('Erro ao agendar horário no Supabase:', err);
+      }
+    }
+
     if (act) {
       showEphemeralToast(`Agendada para ${newTime}`, act.title);
     }
@@ -1254,11 +1539,16 @@ export const ActionsHubPrototype: React.FC = () => {
                   setSidebarOpen(false);
                   if (item.id === 'acoes') {
                     setHubSection('hub');
-                  } else {
-                    showEphemeralToast(
-                      `Seção "${item.label}"`,
-                      'Protótipo focado no módulo de Ações.'
-                    );
+                  } else if (item.id === 'home') {
+                    router.push('/dashboard');
+                  } else if (item.id === 'loja') {
+                    router.push('/loja');
+                  } else if (item.id === 'equipe') {
+                    router.push('/equipe');
+                  } else if (item.id === 'social' || item.id === 'comunidade') {
+                    router.push('/home');
+                  } else if (item.id === 'config') {
+                    router.push('/configuracoes');
                   }
                 }}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
@@ -1289,7 +1579,10 @@ export const ActionsHubPrototype: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => showEphemeralToast('Sessão demo ativa', 'Dados armazenados em memória.')}
+            onClick={async () => {
+              await supabase.auth.signOut();
+              router.push('/login');
+            }}
             className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
@@ -1467,10 +1760,43 @@ export const ActionsHubPrototype: React.FC = () => {
 
         {/* Scrollable Content (generous pb-32 for mobile floating pill + FAB) */}
         <main className="flex-1 overflow-y-auto p-3.5 sm:p-6 pb-32 lg:pb-24 space-y-8">
-          {/* ═══════════════════════════════════════════════════════════════════════
-              VIEW A: HUB PRINCIPAL (/acoes) — Item 1 & Item 2
-             ═══════════════════════════════════════════════════════════════════════ */}
-          {hubSection === 'hub' && (
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-8 space-y-4">
+              <Loader2 className="w-10 h-10 text-[#4850FF] animate-spin" />
+              <div className="space-y-1">
+                <h3 className="font-heading font-black text-sm uppercase tracking-wider text-white">
+                  Carregando Kosmo Hub
+                </h3>
+                <p className="text-xs text-gray-400">
+                  Sincronizando ações, pastas e relacionamentos com o Supabase...
+                </p>
+              </div>
+            </div>
+          ) : loadError ? (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-8 space-y-4 max-w-md mx-auto">
+              <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-heading font-black text-sm uppercase tracking-wider text-white">
+                  Falha na Conexão
+                </h3>
+                <p className="text-xs text-gray-400">{loadError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => userId && loadRealData(userId)}
+                className="px-4 py-2 rounded-xl bg-[#4850FF] hover:bg-blue-600 text-xs font-bold text-white transition-colors cursor-pointer"
+              >
+                Tentar Novamente
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* ═══════════════════════════════════════════════════════════════════════
+                  VIEW A: HUB PRINCIPAL (/acoes) — Item 1 & Item 2
+                 ═══════════════════════════════════════════════════════════════════════ */}
+              {hubSection === 'hub' && (
             <div className="space-y-8 max-w-7xl mx-auto">
               {/* SEÇÃO SUPERIOR: EXPLORADOR DE PASTAS E AÇÕES */}
               <section className="space-y-4">
@@ -3974,7 +4300,9 @@ export const ActionsHubPrototype: React.FC = () => {
               )}
             </div>
           )}
-        </main>
+        </>
+      )}
+    </main>
 
         {/* Floating Action Button (FAB) — Bottom-Right Flame + Plus (with dirty draft badge) */}
         <button
@@ -4023,12 +4351,9 @@ export const ActionsHubPrototype: React.FC = () => {
               onClick={() => {
                 setActiveNav(nav.id);
                 if (nav.id === 'acoes') setHubSection('hub');
-                else {
-                  showEphemeralToast(
-                    `Seção "${nav.label}"`,
-                    'Protótipo focado no módulo de Ações.'
-                  );
-                }
+                else if (nav.id === 'home') router.push('/dashboard');
+                else if (nav.id === 'loja') router.push('/loja');
+                else if (nav.id === 'equipe') router.push('/equipe');
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold transition-colors cursor-pointer ${
                 active
