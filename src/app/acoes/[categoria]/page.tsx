@@ -1,7 +1,7 @@
 'use client';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Plus, Loader2, AlertCircle } from 'lucide-react';
+import { Plus, Loader2, AlertCircle, FolderTree, X, FolderOpen } from 'lucide-react';
 import {
   DragDropContext, Droppable, Draggable, DropResult,
 } from '@hello-pangea/dnd';
@@ -10,10 +10,14 @@ import { supabase } from '@/src/lib/supabase';
 import { cn } from '@/src/lib/utils';
 import { Sidebar } from '@/src/components/ui/Sidebar';
 import { BottomNav } from '@/src/components/ui/BottomNav';
-import { CreateActionModal } from '@/src/components/ferramenta/CreateActionModal';
-import { ActionDetailsModal } from '@/src/components/ferramenta/ActionDetailsModal';
+import { ActionFormModal } from '@/src/components/ferramenta/ActionFormModal';
 import { AcaoCard } from '@/src/components/ferramenta/AcaoCard';
-import { completeAction, undoAction } from '@/src/lib/gamification/actionEngine';
+import { FolderManager } from '@/src/components/ferramenta/FolderManager';
+import { completeAction, undoAction, applyPenalty } from '@/src/lib/gamification/actionEngine';
+import { fetchActionsWithRelations } from '@/src/lib/actions/actionService';
+import { fetchFoldersForUser } from '@/src/lib/actions/folderService';
+import { getDescendantFolderIds, getFolderPathLabel } from '@/src/components/prototypes/folderUtils';
+import { ActionFolder, ActionItem, ActionType } from '@/src/components/prototypes/types';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -54,13 +58,18 @@ export default function CategoriaPage() {
   const { categoria } = useParams() as { categoria: string };
   const router = useRouter();
 
-  const [userId, setUserId]             = useState<string | null>(null);
-  const [pillars, setPillars]           = useState<any[]>([]);
-  const [actions, setActions]           = useState<any[]>([]);
-  const [isLoading, setIsLoading]       = useState(true);
-  const [error, setError]               = useState<string | null>(null);
-  const [isSidebarOpen, setSidebarOpen] = useState(false);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [userId, setUserId]                 = useState<string | null>(null);
+  const [pillars, setPillars]               = useState<any[]>([]);
+  const [actions, setActions]               = useState<ActionItem[]>([]);
+  const [folders, setFolders]               = useState<ActionFolder[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | 'all' | 'loose'>('all');
+  const [isFolderPanelOpen, setIsFolderPanelOpen] = useState(false);
+  const [draggedActionId, setDraggedActionId] = useState<string | null>(null);
+
+  const [isLoading, setIsLoading]           = useState(true);
+  const [error, setError]                   = useState<string | null>(null);
+  const [isSidebarOpen, setSidebarOpen]     = useState(false);
+  const [isCreateOpen, setIsCreateOpen]     = useState(false);
   const [selectedAction, setSelectedAction] = useState<any>(null);
 
   const meta = CATEGORY_META[categoria] ?? CATEGORY_META['todas'];
@@ -70,21 +79,52 @@ export default function CategoriaPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const [actRes, pilRes] = await Promise.all([
-        buildQuery(uid, categoria).order('order_index', { ascending: true }),
+      const [allActions, pilRes, foldersRes] = await Promise.all([
+        fetchActionsWithRelations(uid),
         supabase.from('pillars').select('*').eq('user_id', uid),
+        fetchFoldersForUser().catch(() => []),
       ]);
-      if (actRes.error) throw actRes.error;
       if (pilRes.error) throw pilRes.error;
-      setActions(actRes.data ?? []);
+
+      setActions(allActions);
       setPillars(pilRes.data ?? []);
+      setFolders(foldersRes ?? []);
+
+      // Verificação automática de penalidades vencidas (Item 3)
+      const now = new Date();
+      const overdueActions = allActions.filter((a) => {
+        if (!a.penalty_active || a.penalty_applied || a.status === 'concluido' || !a.due_date) return false;
+        const dueDateTimeStr = a.due_time
+          ? `${a.due_date}T${a.due_time}:00`
+          : a.due_date.includes('T')
+          ? a.due_date
+          : `${a.due_date}T23:59:59`;
+        const dueDate = new Date(dueDateTimeStr);
+        return !isNaN(dueDate.getTime()) && dueDate < now;
+      });
+
+      if (overdueActions.length > 0) {
+        let anyPenalized = false;
+        for (const act of overdueActions) {
+          try {
+            const penRes = await applyPenalty(act.id);
+            if (penRes.ok) anyPenalized = true;
+          } catch (err) {
+            console.warn('[AutoPenalty] Erro em categoria/page:', act.id, err);
+          }
+        }
+        if (anyPenalized) {
+          const reloaded = await fetchActionsWithRelations(uid);
+          setActions(reloaded);
+        }
+      }
     } catch (e: any) {
       console.error(e);
       setError('Erro ao carregar as ações. Verifique sua conexão.');
     } finally {
       setIsLoading(false);
     }
-  }, [categoria]);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -93,6 +133,39 @@ export default function CategoriaPage() {
       fetchAll(session.user.id);
     });
   }, [fetchAll, router]);
+
+  // Ações filtradas por categoria
+  const categoryActions = useMemo(() => {
+    if (categoria === 'historico') {
+      return actions.filter((a) => a.status === 'concluido');
+    }
+    if (categoria === 'todas') {
+      return actions.filter((a) => a.status !== 'concluido');
+    }
+    return actions.filter(
+      (a) => a.status !== 'concluido' && a.type === categoria
+    );
+  }, [actions, categoria]);
+
+  // Ações filtradas adicionalmente pela pasta selecionada
+  const displayedActions = useMemo(() => {
+    if (selectedFolderId === 'all') return categoryActions;
+    if (selectedFolderId === 'loose') {
+      return categoryActions.filter(
+        (a) => !a.folderIds || a.folderIds.length === 0
+      );
+    }
+    const descendantIds = new Set(getDescendantFolderIds(folders, selectedFolderId));
+    return categoryActions.filter((a) =>
+      a.folderIds?.some((fid) => descendantIds.has(fid))
+    );
+  }, [categoryActions, selectedFolderId, folders]);
+
+  // Rótulo da pasta selecionada (se houver)
+  const activeFolderLabel = useMemo(() => {
+    if (selectedFolderId === 'all' || selectedFolderId === 'loose') return null;
+    return getFolderPathLabel(folders, selectedFolderId);
+  }, [folders, selectedFolderId]);
 
   // ── Optimistic status change ───────────────────────────────────────────────
 
@@ -165,15 +238,85 @@ export default function CategoriaPage() {
 
         <main className="flex-1 overflow-y-auto w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5" style={{ scrollbarWidth: 'none' }}>
 
-          {/* Section Title */}
-          <div className="flex items-center justify-between pt-2">
-            <h2 className="font-sans font-black text-lg tracking-widest uppercase text-white">
-              MINHAS AÇÕES
-            </h2>
-            <span className="text-xs text-gray-600 font-bold tracking-wider">
-              {actions.length} {actions.length === 1 ? 'item' : 'itens'}
-            </span>
+          {/* Section Title & Folder Filter Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2">
+            <div>
+              <h2 className="font-sans font-black text-lg tracking-widest uppercase text-white">
+                MINHAS AÇÕES
+              </h2>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-xs text-gray-500 font-bold tracking-wider">
+                  {displayedActions.length} {displayedActions.length === 1 ? 'item exibido' : 'itens exibidos'}
+                  {categoryActions.length !== displayedActions.length && ` (de ${categoryActions.length})`}
+                </span>
+
+                {/* Tag de pasta ativa com botão de limpar */}
+                {activeFolderLabel && (
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#4850FF]/20 border border-[#4850FF]/40 text-[#98A9FF] text-[11px] font-semibold">
+                    <FolderOpen className="w-3 h-3 shrink-0" />
+                    <span className="truncate max-w-[180px]">{activeFolderLabel}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFolderId('all')}
+                      className="hover:text-white cursor-pointer"
+                      title="Limpar filtro de pasta"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
+                {selectedFolderId === 'loose' && (
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sky-500/20 border border-sky-400/40 text-sky-300 text-[11px] font-semibold">
+                    <span>Soltas (Sem pasta)</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFolderId('all')}
+                      className="hover:text-white cursor-pointer"
+                      title="Limpar filtro"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Botão de Alternância do Painel de Pastas */}
+            <button
+              type="button"
+              onClick={() => setIsFolderPanelOpen((v) => !v)}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer self-start sm:self-auto',
+                isFolderPanelOpen || selectedFolderId !== 'all'
+                  ? 'bg-[#4850FF]/20 border-[#4850FF]/50 text-[#98A9FF] shadow-[0_0_12px_rgba(72,80,255,0.2)]'
+                  : 'bg-white/5 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+              )}
+            >
+              <FolderTree className="w-4 h-4 text-[#98A9FF]" />
+              <span>PASTAS</span>
+              {folders.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-[#4850FF] text-white text-[9px] font-black">
+                  {folders.length}
+                </span>
+              )}
+            </button>
           </div>
+
+          {/* Painel do FolderManager quando aberto */}
+          {isFolderPanelOpen && userId && (
+            <div className="pt-1">
+              <FolderManager
+                userId={userId}
+                folders={folders}
+                actions={actions}
+                selectedFolderId={selectedFolderId}
+                onSelectFolder={(fId) => setSelectedFolderId(fId)}
+                onFoldersChanged={() => fetchAll(userId)}
+                draggedActionId={draggedActionId}
+              />
+            </div>
+          )}
 
           {/* Category Pills */}
           <div className="grid grid-cols-4 gap-1.5">
@@ -231,19 +374,29 @@ export default function CategoriaPage() {
                 Tentar novamente
               </button>
             </div>
-          ) : actions.length === 0 ? (
+          ) : displayedActions.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-600">
               <div className="text-4xl">📭</div>
-              <p className="text-sm font-bold tracking-widest uppercase">Nenhuma ação aqui</p>
+              <p className="text-sm font-bold tracking-widest uppercase">
+                {selectedFolderId !== 'all' ? 'Nenhuma ação nesta pasta' : 'Nenhuma ação aqui'}
+              </p>
               {categoria !== 'historico' && (
                 <p className="text-xs text-gray-700 text-center">
-                  Use o botão acima para criar sua primeira ação nesta categoria.
+                  {selectedFolderId !== 'all'
+                    ? 'Use o botão acima para criar uma nova ação vinculada a esta pasta.'
+                    : 'Use o botão acima para criar sua primeira ação nesta categoria.'}
                 </p>
               )}
             </div>
           ) : (
             /* Action list with Drag & Drop */
-            <DragDropContext onDragEnd={handleDragEnd}>
+            <DragDropContext
+              onDragStart={(start) => setDraggedActionId(start.draggableId)}
+              onDragEnd={(res) => {
+                setDraggedActionId(null);
+                handleDragEnd(res);
+              }}
+            >
               <Droppable droppableId="actions-list" isDropDisabled={categoria === 'historico'}>
                 {(provided) => (
                   <div
@@ -251,7 +404,7 @@ export default function CategoriaPage() {
                     {...provided.droppableProps}
                     className="space-y-2.5 pt-1"
                   >
-                    {actions.map((action, index) => (
+                    {displayedActions.map((action, index) => (
                       <Draggable
                         key={action.id}
                         draggableId={action.id}
@@ -261,7 +414,8 @@ export default function CategoriaPage() {
                         {(drag, snapshot) => (
                           <AcaoCard
                             action={action}
-                            pillarColor={getPillarColor(action.pillar)}
+                            pillarColor={getPillarColor(action.pillars?.[0] || '')}
+                            folders={folders}
                             draggable={categoria !== 'historico'}
                             dragProvided={drag}
                             dragSnapshot={snapshot}
@@ -279,35 +433,37 @@ export default function CategoriaPage() {
           )}
         </main>
 
-        {/* Modals */}
-        {isCreateOpen && (
-          <CreateActionModal
-            pillars={pillars}
-            onClose={() => setIsCreateOpen(false)}
+        {/* Modal de Criação e Edição em Abas (ActionFormModal) */}
+        {(isCreateOpen || selectedAction) && (
+          <ActionFormModal
+            isOpen={isCreateOpen || Boolean(selectedAction)}
+            initialAction={selectedAction}
+            initialType={
+              categoria === 'todas' || categoria === 'historico'
+                ? 'fazer'
+                : (categoria as ActionType)
+            }
+            initialFolderIds={
+              selectedFolderId !== 'all' && selectedFolderId !== 'loose'
+                ? [selectedFolderId]
+                : []
+            }
+            onClose={() => {
+              setIsCreateOpen(false);
+              setSelectedAction(null);
+            }}
             onSuccess={() => {
               setIsCreateOpen(false);
-              if (userId) fetchAll(userId);
-            }}
-          />
-        )}
-
-        {selectedAction && (
-          <ActionDetailsModal
-            action={selectedAction}
-            pillars={pillars}
-            onClose={() => setSelectedAction(null)}
-            onSuccess={() => {
-              setSelectedAction(null);
-              if (userId) fetchAll(userId);
-            }}
-            onDelete={() => {
               setSelectedAction(null);
               if (userId) fetchAll(userId);
             }}
           />
         )}
 
-        <BottomNav active="/acoes" />
+        <BottomNav
+          active="/acoes"
+          onActionClick={() => setIsCreateOpen(true)}
+        />
       </div>
     </div>
   );

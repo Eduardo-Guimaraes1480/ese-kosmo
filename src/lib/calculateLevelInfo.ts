@@ -15,8 +15,8 @@ export function calculateLevelInfo(totalXp: number) {
   }
 
   if (totalXp >= 204700) {
-    let excessXp = totalXp - 204700;
-    let extraLevels = Math.floor(excessXp / 100000);
+    const excessXp = totalXp - 204700;
+    const extraLevels = Math.floor(excessXp / 100000);
     currentLevel = 12 + extraLevels;
     return {
       level: currentLevel,
